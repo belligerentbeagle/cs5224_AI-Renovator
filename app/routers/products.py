@@ -1,10 +1,10 @@
-from typing import Annotated, Literal
+from typing import Literal
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, HTTPException, Query
 
-from app.models.schemas import Product, ProductDetail, ScrapedProduct, Substitute
-from app.services.provider_registry import Providers, get_providers
+from app.models.schemas import Product, ProductDetail, ScrapedProduct
+from app.services.provider_registry import Providers
 
 router = APIRouter(prefix="/products", tags=["Products"])
 
@@ -46,18 +46,6 @@ async def get_product(
         if detail is not None:
             return detail
     raise HTTPException(status_code=404, detail="Product not found")
-
-
-
-@router.get("/{id}/substitutes", response_model=list[Substitute])
-async def get_substitutes(
-    id: UUID,
-    max_price: float = Query(..., ge=0),
-    reason: Literal["over_budget", "out_of_stock"] = Query(...),
-):
-    # TODO: find visually similar products within budget
-    raise HTTPException(status_code=501, detail="Not implemented")
-
 
 @router.post("/from-url", response_model=ScrapedProduct)
 async def index_product_from_url(body: dict):
