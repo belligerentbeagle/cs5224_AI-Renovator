@@ -1,3 +1,7 @@
+from dotenv import load_dotenv
+
+load_dotenv()  # loads .env from the project root before anything else runs
+
 from fastapi import FastAPI
 from app.routers import auth, projects, generation, products, cart
 
