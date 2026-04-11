@@ -12,6 +12,7 @@ from app.models.orm import (
     DesignGeneration,
     GenerationProduct,
     GenerationStatus,
+    Photo,
     Product as ProductORM,
     Project,
 )
@@ -135,18 +136,31 @@ async def poll_generation(id: UUID, db: DB, current_user: CurrentUser):
 # ── Background task ───────────────────────────────────────────────────────────
 
 async def _run_product_search(design_id: str, style_name: str) -> None:
-    """Search IKEA for products matching the style and store results in DB.
+    """Search IKEA for products, then call Gemini to generate the room image.
 
-    Runs after the HTTP response is sent.  Creates its own DB session since
-    the request session is closed by the time this executes.
+    Runs after the HTTP response is sent (FastAPI BackgroundTasks).
+    Creates its own DB session since the request session is already closed.
+
+    Steps
+    ─────
+    1. Search IKEA for furniture matching the style.
+    2. Upsert Product rows and create GenerationProduct join rows.
+    3. If the generation has an input photo, call Gemini with the room
+       photo + product names to generate a redesigned image.
+    4. Upload the result to S3 and record a Photo row for it.
+    5. Mark the DesignGeneration as completed (or failed on any error).
     """
+    import asyncio
     from app.services.provider_registry import _ikea  # avoid circular import at module level
+    from app.services.gemini_generation import generate_room_image
 
     db = SessionLocal()
     try:
+        # ── Step 1 & 2: IKEA product search ────────────────────────────────
         provider = _ikea()
         results = await provider.search(q=style_name, style=style_name)
 
+        product_names: list[str] = []
         for i, product in enumerate(results[:8]):
             # Upsert: avoid duplicate product rows for the same external item
             existing = db.query(ProductORM).filter(
@@ -174,8 +188,38 @@ async def _run_product_search(design_id: str, style_name: str) -> None:
                 y_position=float(i // 4) * 0.5,
             )
             db.add(gp)
+            product_names.append(product.name)
 
+        db.flush()
+
+        # ── Step 3 & 4: Gemini image generation ────────────────────────────
         gen = db.query(DesignGeneration).filter(DesignGeneration.design_id == design_id).first()
+        if gen and gen.input_photo_id:
+            photo = db.query(Photo).filter(Photo.photo_id == gen.input_photo_id).first()
+            if photo:
+                # generate_room_image is synchronous (boto3 + google-genai);
+                # run it in a thread so we don't block the event loop.
+                output_key = await asyncio.to_thread(
+                    generate_room_image,
+                    photo.s3_key,
+                    design_id,
+                    style_name,
+                    gen.prompt_text,
+                    product_names,
+                )
+
+                # Record the generated image as a Photo row
+                gen_photo = Photo(
+                    project_id=gen.project_id,
+                    photo_type="generated",
+                    s3_key=output_key,
+                    file_name="output.jpg",
+                    mime_type="image/jpeg",
+                )
+                db.add(gen_photo)
+                db.flush()
+                gen.generated_photo_id = gen_photo.photo_id
+
         if gen:
             gen.status = GenerationStatus.completed
         db.commit()
