@@ -90,24 +90,28 @@ def run(room_path: str, furniture_paths: list[str], style: str, prompt: str | No
 
     extra = f" {prompt.strip()}" if prompt else ""
     instruction = (
-        f"You are a professional interior designer performing a room makeover.\n\n"
-        f"CRITICAL — room preservation rules (do not break these):\n"
-        f"- The output image MUST use the EXACT same room from the first photo as the background.\n"
-        f"- Do NOT change the walls, floor material, ceiling, windows, doorways, or room dimensions.\n"
-        f"- Do NOT change the camera angle, perspective, or field of view.\n"
-        f"- The room structure must look IDENTICAL to the input photo.\n\n"
+        f"You are performing a precise furniture placement task — NOT a full room redesign.\n\n"
+        f"ROOM BACKGROUND — strict rules:\n"
+        f"- Use the EXACT room from the first photo as the background. Do not alter it in any way.\n"
+        f"- Do NOT change walls, floor, ceiling, windows, doorways, skirting boards, or room dimensions.\n"
+        f"- Do NOT change the camera angle, perspective, or crop.\n\n"
         + (
-            f"Furniture to place:\n"
+            f"FURNITURE TO ADD — the ONLY change allowed:\n"
             + "\n".join(f"- {label}" for _, _, label in furniture_image_data)
-            + f"\nPlace ONLY these exact items into the room as shown in their product images above.\n\n"
+            + f"\nPlace these items into the room exactly as they appear in the product images above.\n\n"
             if furniture_image_data else ""
         )
-        + f"Style: {style}.{extra}\n\n"
-        + "Output requirements:\n"
-        f"- Do NOT add any furniture, plants, rugs, cushions, artwork, lamps, or objects beyond what is listed above.\n"
-        f"- Do NOT remove or replace any architectural features of the room.\n"
-        f"- Place only the listed furniture items — nothing else.\n"
-        f"- The result should look like a real photograph of that specific room with only those items placed inside it."
+        + f"STRICT PROHIBITIONS — do not add any of the following under any circumstances:\n"
+        f"- Rugs or mats\n"
+        f"- Coffee tables, side tables, or any additional tables\n"
+        f"- Cushions or throws not already on the listed furniture\n"
+        f"- Plants, flowers, or any greenery\n"
+        f"- Lamps, floor lights, or ceiling lights\n"
+        f"- Artwork, frames, mirrors, or wall decorations\n"
+        f"- Shelves, cabinets, or storage not in the furniture list\n"
+        f"- Any object, decoration, or furniture not explicitly listed above\n\n"
+        f"Style finish: {style}.{extra}\n\n"
+        f"The final image must show the original room with ONLY the listed furniture placed inside it — nothing else added, nothing removed."
     )
     parts.append(types.Part(text=instruction))
 
