@@ -33,7 +33,7 @@ export interface GeneratedProduct {
   product_id: string
   name: string
   price: number
-  source: string
+  source: 'ikea' | 'taobao' | 'scraped'
   buy_url: string
 }
 
@@ -47,3 +47,15 @@ export interface GenerationDone {
 }
 
 export type GenerationResult = GenerationPending | GenerationDone
+
+export interface CartItem {
+  product_id: string
+  name: string
+  price: number
+  affiliate_url?: string
+}
+
+export interface CartResponse {
+  total: number
+  items: CartItem[]
+}

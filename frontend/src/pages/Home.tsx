@@ -1,8 +1,6 @@
 import { useState, useRef, useCallback } from 'react'
-import { useNavigate } from 'react-router-dom'
 import { useAuth } from '../context/AuthContext'
-import { indexFromUrl, searchProducts, createProject, presignUpload, uploadFileToS3, generateRoom, pollGeneration } from '../api'
-import ProductCard from '../components/ProductCard'
+import { indexFromUrl, searchProducts, createProject, presignUpload, uploadFileToS3, generateRoom, designForMe, pollGeneration } from '../api'
 import { Product, GenerationDone } from '../types'
 
 const STYLES = ['Modern', 'Scandinavian', 'Cozy Warm', 'Futuristic', 'Nature', 'Industrial']
@@ -19,7 +17,6 @@ type LeftTab = 'url' | 'browse'
 
 export default function Home() {
   const { token } = useAuth()
-  const navigate = useNavigate()
 
   // ── Furniture selection ────────────────────────────────────────────────────
   const [leftTab, setLeftTab] = useState<LeftTab>('url')
@@ -106,8 +103,13 @@ export default function Home() {
       alert('Please sign in first to generate designs.')
       return
     }
+    if (!roomFile) {
+      setGenStatus('Please upload a room photo before generating.')
+      return
+    }
     setGenerating(true)
     setGenResult(null)
+    setUrlError('')
     setGenStatus('Creating project…')
 
     try {
@@ -117,20 +119,50 @@ export default function Home() {
         style_prompt: selectedStyle,
       })
 
-      // 2. Upload room photo if provided
-      let photoId: string | null = null
-      if (roomFile) {
-        setGenStatus('Uploading room photo…')
-        const { photo_id, upload_url } = await presignUpload(
-          token, project.project_id, roomFile.name, roomFile.type,
-        )
-        await uploadFileToS3(upload_url, roomFile)
-        photoId = photo_id
+      // 2. Upload room photo
+      setGenStatus('Uploading room photo…')
+      const { photo_id, upload_url } = await presignUpload(
+        token, project.project_id, roomFile.name, roomFile.type,
+      )
+      const uploadResponse = await uploadFileToS3(upload_url, roomFile)
+      if (!uploadResponse.ok) {
+        throw new Error(`Room photo upload failed (${uploadResponse.status})`)
       }
 
       // 3. Kick off generation
-      setGenStatus('Searching for furniture…')
-      const gen = await generateRoom(token, project.project_id, photoId, selectedStyle)
+      const promptText = selectedItems.length > 0
+        ? `Place only the selected furniture into the room in a ${selectedStyle.toLowerCase()} style.`
+        : `Create a ${selectedStyle.toLowerCase()} living room concept for this space.`
+
+      setGenStatus(
+        selectedItems.length > 0
+          ? 'Generating room with selected furniture…'
+          : 'Generating design concept…',
+      )
+
+      const gen = selectedItems.length > 0
+        ? await generateRoom(
+            token,
+            project.project_id,
+            photo_id,
+            selectedItems.map((item) => ({
+              name: item.name,
+              image_url: item.image_url,
+              product_id: item.product_id,
+              price: item.price,
+              source: item.source,
+              buy_url: item.buy_url,
+            })),
+            selectedStyle,
+            promptText,
+          )
+        : await designForMe(
+            token,
+            project.project_id,
+            photo_id,
+            selectedStyle,
+            promptText,
+          )
 
       // 4. Poll until done
       let attempts = 0
@@ -138,12 +170,15 @@ export default function Home() {
         await new Promise((r) => setTimeout(r, 2000))
         const result = await pollGeneration(token, gen.generation_id)
         if (result.status === 'done') {
-          setGenResult(result as GenerationDone)
+          setGenResult(result)
           setGenStatus('')
           break
         }
         attempts++
-        setGenStatus(`Finding matching furniture (${attempts * 2}s)…`)
+        setGenStatus(`Generating preview (${attempts * 2}s)…`)
+      }
+      if (attempts >= 30) {
+        throw new Error('Generation timed out. Please try again.')
       }
     } catch (err: unknown) {
       setGenStatus('Generation failed: ' + (err instanceof Error ? err.message : 'unknown error'))
@@ -367,6 +402,15 @@ export default function Home() {
               <p className="text-sm font-semibold text-rs-dark mb-2">
                 ✓ Design ready — {genResult.products.length} items found
               </p>
+              {genResult.image_url && (
+                <div className="mb-3">
+                  <img
+                    src={genResult.image_url}
+                    alt="Generated room preview"
+                    className="w-full h-48 object-cover rounded-xl border border-rs-border bg-stone-100"
+                  />
+                </div>
+              )}
               {genResult.over_budget && (
                 <p className="text-xs text-red-500 mb-2">⚠ Over budget</p>
               )}

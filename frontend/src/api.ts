@@ -16,8 +16,13 @@ async function request<T>(path: string, init?: RequestInit, token?: string): Pro
   }
   const res = await fetch(`${BASE}${path}`, { ...init, headers })
   if (!res.ok) {
-    const body = await res.text().catch(() => '')
-    throw new Error(body || `HTTP ${res.status}`)
+    const bodyText = await res.text().catch(() => '')
+    try {
+      const parsed = JSON.parse(bodyText) as { detail?: string }
+      throw new Error(parsed.detail || bodyText || `HTTP ${res.status}`)
+    } catch {
+      throw new Error(bodyText || `HTTP ${res.status}`)
+    }
   }
   return res.json() as Promise<T>
 }
@@ -87,27 +92,38 @@ export const uploadFileToS3 = (uploadUrl: string, file: File) =>
 
 // ── Generation ────────────────────────────────────────────────────────────────
 
+type FurniturePayload = {
+  name: string
+  image_url?: string
+  product_id?: string
+  price: number
+  source: 'ikea' | 'taobao' | 'scraped'
+  buy_url?: string
+}
+
 export const generateRoom = (
+  token: string,
+  project_id: string,
+  photo_id: string,
+  furniture: FurniturePayload[],
+  style_name: string,
+  prompt_text?: string,
+) =>
+  request<import('./types').GenerationPending>('/generate/room', {
+    method: 'POST',
+    body: JSON.stringify({ project_id, photo_id, furniture, style_name, prompt_text }),
+  }, token)
+
+export const designForMe = (
   token: string,
   project_id: string,
   photo_id: string | null,
   style_name: string,
   prompt_text?: string,
 ) =>
-  request<import('./types').GenerationPending>('/generate/room', {
-    method: 'POST',
-    body: JSON.stringify({ project_id, photo_id, style_name, prompt_text }),
-  }, token)
-
-export const designForMe = (
-  token: string,
-  project_id: string,
-  style_name: string,
-  prompt_text?: string,
-) =>
   request<import('./types').GenerationPending>('/generate/design-for-me', {
     method: 'POST',
-    body: JSON.stringify({ project_id, style_name, prompt_text }),
+    body: JSON.stringify({ project_id, photo_id, style_name, prompt_text }),
   }, token)
 
 export const pollGeneration = (token: string, generationId: string) =>
@@ -116,7 +132,7 @@ export const pollGeneration = (token: string, generationId: string) =>
 // ── Cart ──────────────────────────────────────────────────────────────────────
 
 export const getCart = (token: string, projectId: string) =>
-  request<{ total: number; items: import('./types').GeneratedProduct[] }>(
+  request<import('./types').CartResponse>(
     `/projects/${projectId}/cart`,
     undefined,
     token,
