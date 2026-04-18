@@ -75,8 +75,20 @@ CREATE TABLE generation_products (
     PRIMARY KEY (design_id, product_id, x_position, y_position)
 );
 
+-- 7. AFFILIATE_CLICKS  (cart click tracking)
+CREATE TABLE affiliate_clicks (
+    click_id     UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id      UUID NOT NULL REFERENCES users(user_id) ON DELETE CASCADE,
+    project_id   UUID NOT NULL REFERENCES projects(project_id) ON DELETE CASCADE,
+    product_id   UUID NOT NULL REFERENCES products(product_id) ON DELETE CASCADE,
+    redirect_url TEXT NOT NULL,
+    clicked_at   TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
 -- INDEXES (PostgreSQL does not auto-index FK columns)
 CREATE INDEX idx_projects_user_id              ON projects(user_id);
 CREATE INDEX idx_photos_project_id             ON photos(project_id);
 CREATE INDEX idx_design_generations_project_id ON design_generations(project_id);
 CREATE INDEX idx_products_external             ON products(external_source, external_product_id);
+CREATE INDEX idx_affiliate_clicks_user_id      ON affiliate_clicks(user_id);
+CREATE INDEX idx_affiliate_clicks_product_id   ON affiliate_clicks(product_id);

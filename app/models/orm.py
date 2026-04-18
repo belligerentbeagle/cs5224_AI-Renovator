@@ -115,3 +115,14 @@ class GenerationProduct(Base):
     created_at = Column(DateTime(timezone=True), default=datetime.utcnow)
 
     product = relationship("Product")
+
+
+class AffiliateClick(Base):
+    __tablename__ = "affiliate_clicks"
+
+    click_id     = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id      = Column(UUID(as_uuid=True), ForeignKey("users.user_id", ondelete="CASCADE"), nullable=False)
+    project_id   = Column(UUID(as_uuid=True), ForeignKey("projects.project_id", ondelete="CASCADE"), nullable=False)
+    product_id   = Column(UUID(as_uuid=True), ForeignKey("products.product_id", ondelete="CASCADE"), nullable=False)
+    redirect_url = Column(Text, nullable=False)
+    clicked_at   = Column(DateTime(timezone=True), default=datetime.utcnow, nullable=False)

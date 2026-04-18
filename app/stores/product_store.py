@@ -62,3 +62,32 @@ class ProductStore(BaseStore[Product]):
             List of Product instances
         """
         return self.db.query(Product).filter(Product.product_id.in_(product_ids)).all()
+
+    def get_products_for_project(
+        self,
+        project_id: UUID,
+        design_id: Optional[UUID] = None,
+    ) -> list[Product]:
+        """Get all unique products linked to a project's design generations.
+
+        Uses a single JOIN query across design_generations → generation_products → products.
+        Optionally filtered to a single design generation.
+
+        Args:
+            project_id: Project UUID
+            design_id: Optional design generation UUID to filter by
+
+        Returns:
+            Deduplicated list of Product instances
+        """
+        from app.models.orm import DesignGeneration, GenerationProduct
+
+        q = (
+            self.db.query(Product)
+            .join(GenerationProduct, GenerationProduct.product_id == Product.product_id)
+            .join(DesignGeneration, DesignGeneration.design_id == GenerationProduct.design_id)
+            .filter(DesignGeneration.project_id == project_id)
+        )
+        if design_id:
+            q = q.filter(DesignGeneration.design_id == design_id)
+        return q.distinct(Product.product_id).all()

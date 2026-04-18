@@ -40,3 +40,24 @@ class GenerationProductStore(BaseStore[GenerationProduct]):
         return self.db.query(GenerationProduct).filter(
             GenerationProduct.design_id == design_id
         ).all()
+
+    def delete_by_product_and_designs(self, product_id: UUID, design_ids: list[UUID]) -> int:
+        """Remove a product from a set of design generations.
+
+        Args:
+            product_id: Product UUID to remove
+            design_ids: Design generation UUIDs to remove the product from
+
+        Returns:
+            Number of rows deleted
+        """
+        if not design_ids:
+            return 0
+        return (
+            self.db.query(GenerationProduct)
+            .filter(
+                GenerationProduct.product_id == product_id,
+                GenerationProduct.design_id.in_(design_ids),
+            )
+            .delete(synchronize_session=False)
+        )

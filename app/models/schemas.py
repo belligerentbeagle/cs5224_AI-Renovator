@@ -105,11 +105,15 @@ class CartItem(BaseModel):
     product_id: UUID
     name: str
     price: float
+    currency: str | None = None
+    source: str | None = None
+    image_url: HttpUrl | None = None
     affiliate_url: HttpUrl | None = None
 
 
 class CartResponse(BaseModel):
     total: float
+    over_budget: bool = False
     items: list[CartItem] = []
 
 
