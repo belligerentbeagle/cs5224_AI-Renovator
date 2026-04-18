@@ -27,7 +27,7 @@ logger = logging.getLogger(__name__)
 
 _BUCKET = os.environ.get("S3_BUCKET", "roomstyle-cs5224")
 _REGION = os.environ.get("AWS_REGION", "ap-southeast-1")
-_MODEL = "gemini-2.5-flash-image"
+_MODEL = "gemini-3-pro-image-preview"
 _MAX_FURNITURE = 6   # cap to stay within Gemini's per-request image limits
 
 
@@ -101,28 +101,21 @@ def generate_room_image(
     extra = f" {prompt_text.strip()}" if prompt_text else ""
     furniture_names = ", ".join(label for _, _, label in furniture_images)
     instruction = (
-        f"You are performing a precise furniture placement task — NOT a full room redesign.\n\n"
+        f"You are a model specialised in room designing, performing a precise furniture placement task — NOT a full room redesign.\n\n"
         f"ROOM BACKGROUND — strict rules (MY JOB DEPENDS ON THIS SO PLEASE STRICTLY FOLLOW!):\n"
         f"- Use the EXACT room from the first photo as the background. Do not alter it in any way.\n"
         f"- Do NOT change walls, floor, ceiling, windows, doors, doorways, skirting boards, or room dimensions.\n"
         f"- Do NOT remove ANY existing structural items like built-in cabinets, shelves, or architectural details.\n"
         f"- Every single item originally present in the room image SHOULD NOT BE CHANGED. Nothing must be removed, modified, or painted over.\n"
-        f"- Do NOT change the camera angle, perspective, or crop.\n\n"
+        f"- Do NOT change the camera angle, perspective, ORIENTATION, or crop of the room's image!\n\n"
+        f"- IMPORTANT: Ensure that the furniture you add looks natural and DOES NOT have unnatural lighting or shadows. It should naturally BLEND IN with the room.\n"
         + (
             f"FURNITURE TO ADD — the ONLY change allowed:\n"
             + "\n".join(f"- {label}" for _, _, label in furniture_images)
             + f"\nPlace these items into the room exactly as they appear in the product images above.\n\n"
             if furniture_images else ""
         )
-        + f"STRICT PROHIBITIONS — do not add any of the following under any circumstances:\n"
-        f"- Rugs or mats\n"
-        f"- Coffee tables, side tables, or any additional tables\n"
-        f"- Cushions or throws not already on the listed furniture\n"
-        f"- Plants, flowers, or any greenery\n"
-        f"- Lamps, floor lights, or ceiling lights\n"
-        f"- Artwork, frames, mirrors, or wall decorations\n"
-        f"- Shelves, cabinets, or storage not in the furniture list\n"
-        f"- Any object, decoration, or furniture not explicitly listed above\n\n"
+        +
         f"Style finish: {style_name}.{extra}\n\n"
         f"The final image must show the original room with ONLY the listed furniture placed inside it — nothing else added, absolutely nothing else removed or changed."
     )
