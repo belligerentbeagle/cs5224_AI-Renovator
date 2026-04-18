@@ -39,6 +39,7 @@ export default function Home() {
   const [browseResults, setBrowseResults] = useState<Product[]>([])
   const [browseQuery, setBrowseQuery] = useState('')
   const [browseLoading, setBrowseLoading] = useState(false)
+  const [budgetLimit, setBudgetLimit] = useState<string>('')
 
   // ── Room upload ────────────────────────────────────────────────────────────
   const [roomFile, setRoomFile] = useState<File | null>(null)
@@ -105,6 +106,14 @@ export default function Home() {
   function addItem(product: Product) {
     if (selectedItems.length >= 5) return
     if (selectedItems.find((p) => p.product_id === product.product_id)) return
+    
+    // Check budget
+    const currentTotal = selectedItems.reduce((sum, item) => sum + item.price, 0)
+    const newTotal = currentTotal + product.price
+    if (budgetLimit && newTotal > Number(budgetLimit)) {
+      alert(`Warning: Adding this item will put you over your budget of S$${budgetLimit}!`)
+    }
+
     setSelectedItems((prev) => [...prev, product])
   }
 
@@ -133,9 +142,18 @@ export default function Home() {
       return
     }
     if (!roomFile) {
-      setGenStatus('Please upload a room photo before generating.')
+      alert('Please upload a room photo before generating.')
       return
     }
+
+    if (budgetLimit) {
+      const totalCost = selectedItems.reduce((acc, item) => acc + item.price, 0)
+      if (totalCost > Number(budgetLimit)) {
+        const proceed = window.confirm(`Warning: The total cost of the selected furniture (S$${totalCost.toFixed(2)}) exceeds your budget of S$${budgetLimit}! Do you still want to proceed with generation?`)
+        if (!proceed) return
+      }
+    }
+
     setGenerating(true)
     setGenResult(null)
     setGenHistory([])
@@ -150,6 +168,7 @@ export default function Home() {
       const project = await createProject(token, {
         title: `Room – ${selectedStyle}`,
         style_prompt: selectedStyle,
+        budget_limit: budgetLimit ? Number(budgetLimit) : undefined,
       })
 
       // 2. Upload room photo
@@ -215,7 +234,9 @@ export default function Home() {
         throw new Error('Generation timed out. Please try again.')
       }
     } catch (err: unknown) {
-      setGenStatus('Generation failed: ' + (err instanceof Error ? err.message : 'unknown error'))
+      const msg = 'Generation failed: ' + (err instanceof Error ? err.message : 'unknown error')
+      setGenStatus(msg)
+      alert(msg)
     } finally {
       setGenerating(false)
     }
@@ -291,6 +312,17 @@ export default function Home() {
             1. Add Furniture Options (URL/Upload)
           </h2>
 
+          <div className="flex flex-col gap-1">
+            <label className="text-xs text-stone-500 font-medium">Total Budget (S$)</label>
+            <input 
+              type="number"
+              className="input text-sm"
+              placeholder="e.g. 1000"
+              value={budgetLimit}
+              onChange={(e) => setBudgetLimit(e.target.value)}
+            />
+          </div>
+
           {/* Tab switcher */}
           <div className="flex gap-1 bg-cream rounded-xl p-1">
             {([['url', 'Product Link'], ['browse', 'Browse Catalogue']] as const).map(([tab, label]) => (
@@ -350,7 +382,13 @@ export default function Home() {
                     ? <img src={p.image_url} className="w-10 h-10 rounded-lg object-cover bg-stone-100 shrink-0" alt="" />
                     : <div className="w-10 h-10 rounded-lg bg-cream flex items-center justify-center text-lg shrink-0">🛋️</div>}
                   <div className="flex-1 min-w-0">
-                    <p className="text-xs font-medium truncate">{p.name}</p>
+                    {p.buy_url ? (
+                      <a href={p.buy_url} target="_blank" rel="noopener noreferrer" className="text-xs font-medium truncate hover:underline hover:text-rs-amber block">
+                        {p.name}
+                      </a>
+                    ) : (
+                      <p className="text-xs font-medium truncate">{p.name}</p>
+                    )}
                     <p className="text-xs text-rs-amber">S${p.price.toFixed(2)}</p>
                   </div>
                   <button
@@ -367,9 +405,19 @@ export default function Home() {
 
           {/* Selected items */}
           <div>
-            <p className="text-xs text-stone-500 mb-2">
-              Selected Items ({selectedItems.length}/5)
-            </p>
+            <div className="flex justify-between items-end mb-2">
+              <p className="text-xs text-stone-500">
+                Selected Items ({selectedItems.length}/5)
+              </p>
+              <p className={`text-xs font-medium ${
+                budgetLimit && selectedItems.reduce((acc, item) => acc + item.price, 0) > Number(budgetLimit)
+                  ? 'text-red-500'
+                  : 'text-stone-500'
+              }`}>
+                Total: S${selectedItems.reduce((acc, item) => acc + item.price, 0).toFixed(2)}
+                {budgetLimit ? ` / S$${budgetLimit}` : ''}
+              </p>
+            </div>
             {selectedItems.length === 0 ? (
               <p className="text-xs text-stone-400 italic">No items selected yet</p>
             ) : (
@@ -387,7 +435,13 @@ export default function Home() {
                     >
                       ×
                     </button>
-                    <p className="text-xs text-center mt-0.5 w-16 truncate text-stone-600">{item.name}</p>
+                    {item.buy_url ? (
+                      <a href={item.buy_url} target="_blank" rel="noopener noreferrer" className="text-xs text-center mt-0.5 w-16 truncate text-stone-600 hover:underline hover:text-rs-amber block mx-auto">
+                        {item.name}
+                      </a>
+                    ) : (
+                      <p className="text-xs text-center mt-0.5 w-16 truncate text-stone-600">{item.name}</p>
+                    )}
                   </div>
                 ))}
               </div>
@@ -445,26 +499,6 @@ export default function Home() {
               className="hidden"
               onChange={(e) => { const f = e.target.files?.[0]; if (f) handleFile(f) }}
             />
-          </div>
-
-          {/* Style picker */}
-          <div>
-            <p className="text-xs text-stone-500 mb-2">Style</p>
-            <div className="flex flex-wrap gap-1.5">
-              {STYLES.map((s) => (
-                <button
-                  key={s}
-                  onClick={() => setSelectedStyle(s)}
-                  className={`px-3 py-1 rounded-lg text-xs font-medium border transition-all ${
-                    selectedStyle === s
-                      ? 'border-rs-amber bg-rs-amber text-white'
-                      : `border-rs-border ${STYLE_COLORS[s]} text-stone-600 hover:border-rs-light`
-                  }`}
-                >
-                  {s}
-                </button>
-              ))}
-            </div>
           </div>
 
           {/* Generate button */}
@@ -562,7 +596,13 @@ export default function Home() {
                   <div className="flex flex-col gap-1.5 max-h-32 overflow-y-auto">
                     {displayed.products.map((p) => (
                       <div key={p.product_id} className="flex items-center justify-between gap-2 text-xs">
-                        <span className="truncate flex-1 text-stone-700">{p.name}</span>
+                        {p.buy_url ? (
+                          <a href={p.buy_url} target="_blank" rel="noopener noreferrer" className="truncate flex-1 text-stone-700 hover:underline hover:text-rs-amber">
+                            {p.name}
+                          </a>
+                        ) : (
+                          <span className="truncate flex-1 text-stone-700">{p.name}</span>
+                        )}
                         <span className="text-rs-amber font-medium shrink-0">S${p.price.toFixed(2)}</span>
                         <a href={p.buy_url} target="_blank" rel="noopener noreferrer"
                           className="text-rs-amber underline shrink-0 hover:text-rs-dark">Buy →</a>
@@ -679,7 +719,13 @@ export default function Home() {
                       ? <img src={p.image_url} className="w-9 h-9 rounded-lg object-cover bg-stone-100 shrink-0" alt="" />
                       : <div className="w-9 h-9 rounded-lg bg-cream flex items-center justify-center text-base shrink-0">🛋️</div>}
                     <div className="flex-1 min-w-0">
-                      <p className="text-xs font-medium truncate">{p.name}</p>
+                      {p.buy_url ? (
+                        <a href={p.buy_url} target="_blank" rel="noopener noreferrer" className="text-xs font-medium truncate hover:underline hover:text-rs-amber block">
+                          {p.name}
+                        </a>
+                      ) : (
+                        <p className="text-xs font-medium truncate">{p.name}</p>
+                      )}
                       <p className="text-xs text-rs-amber">S${p.price.toFixed(2)}</p>
                     </div>
                     <button
