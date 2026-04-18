@@ -127,14 +127,18 @@ def generate_room_image(
     parts.append(types.Part(text=instruction))
 
     # ── Call Gemini ────────────────────────────────────────────────────────
-    client = genai.Client(api_key=api_key)
-    response = client.models.generate_content(
-        model=_MODEL,
-        contents=[types.Content(role="user", parts=parts)],
-        config=types.GenerateContentConfig(
-            response_modalities=["IMAGE", "TEXT"],
-        ),
-    )
+    try:
+        client = genai.Client(api_key=api_key)
+        response = client.models.generate_content(
+            model=_MODEL,
+            contents=[types.Content(role="user", parts=parts)],
+            config=types.GenerateContentConfig(
+                response_modalities=["IMAGE", "TEXT"],
+            ),
+        )
+    except Exception as e:
+        logger.error("Gemini API call failed: %s", str(e))
+        raise RuntimeError(f"Gemini API call failed: {str(e)}") from e
 
     # ── Extract image bytes ────────────────────────────────────────────────
     image_bytes: bytes | None = None

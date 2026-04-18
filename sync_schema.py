@@ -8,7 +8,6 @@ for local machines that do not have the PostgreSQL CLI installed.
 from __future__ import annotations
 
 import os
-import sys
 from pathlib import Path
 
 import psycopg2

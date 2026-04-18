@@ -33,9 +33,9 @@ load_dotenv()
 
 BASE = "http://localhost:8000"
 ROOM_IMAGE = Path(__file__).parent / "house.jpg"
-TEST_EMAIL = "e2e_test@roomstyle.dev"
+TEST_EMAIL = "e2e_test2@roomstyle.dev"
 TEST_PASSWORD = "TestPass123!"
-STYLE = "scandinavian"
+STYLE = "mediteranian"
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -134,7 +134,7 @@ def main() -> None:
 
     # ── Step 6: Search IKEA for furniture ─────────────────────────────────
     step(6, "Search IKEA furniture")
-    r = client.get("/products", params={"q": "sofa", "source": "ikea"}, timeout=30.0)
+    r = client.get("/products", params={"q": "mediteranian sofa", "source": "ikea"}, timeout=30.0)
     if r.status_code != 200:
         fail("Product search failed", r.text)
 
