@@ -55,6 +55,7 @@ export default function Home() {
   const [genResult, setGenResult] = useState<GenerationDone | null>(null)
   const [isRefinementResult, setIsRefinementResult] = useState(false)
   const [genHistory, setGenHistory] = useState<GenerationDone[]>([])
+  const [historyView, setHistoryView] = useState<GenerationDone | null>(null)
 
   // ── Chat / refinement ─────────────────────────────────────────────────────
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>([])
@@ -139,6 +140,7 @@ export default function Home() {
     setGenResult(null)
     setGenHistory([])
     setIsRefinementResult(false)
+    setHistoryView(null)
     setChatMessages([])
     setUrlError('')
     setGenStatus('Creating project…')
@@ -222,7 +224,8 @@ export default function Home() {
   // ── Refine (chat) ─────────────────────────────────────────────────────────
   async function handleRefine(e: React.FormEvent) {
     e.preventDefault()
-    if (!token || !genResult || !chatInput.trim() || chatLoading) return
+    const activeGen = historyView ?? genResult
+    if (!token || !activeGen || !chatInput.trim() || chatLoading) return
 
     const text = chatInput.trim()
     setChatInput('')
@@ -230,7 +233,7 @@ export default function Home() {
     setChatMessages((prev) => [...prev, { text, status: 'refining' }])
 
     try {
-      const pending = await refineGeneration(token, genResult.generation_id, text)
+      const pending = await refineGeneration(token, activeGen.generation_id, text)
 
       // Poll for the refined result
       let attempts = 0
@@ -238,9 +241,10 @@ export default function Home() {
         await new Promise((r) => setTimeout(r, 2000))
         const result = await pollGeneration(token, pending.generation_id)
         if (result.status === 'done') {
-          // Push current image to history before replacing it
-          setGenHistory((prev) => [...prev, genResult])
+          // Push the version we refined from into history, set latest, clear history view
+          setGenHistory((prev) => [...prev, activeGen])
           setGenResult(result)
+          setHistoryView(null)
           setIsRefinementResult(true)
           setChatMessages((prev) =>
             prev.map((m, i) => i === prev.length - 1 ? { ...m, status: 'done' } : m)
@@ -478,17 +482,25 @@ export default function Home() {
           </p>
 
           {/* Generation result */}
-          {genResult && (
+          {genResult && (() => {
+            const displayed = historyView ?? genResult
+            const isViewingHistory = historyView !== null
+            return (
             <div className="rounded-2xl border border-rs-border bg-cream/40 p-4 flex flex-col gap-3">
 
               {/* Generated image with loading overlay */}
-              {genResult.image_url && (
+              {displayed.image_url && (
                 <div className="relative">
                   <img
-                    src={genResult.image_url}
+                    src={displayed.image_url}
                     alt="Generated room"
                     className={`w-full rounded-xl border border-rs-border object-cover bg-stone-100 transition-opacity ${chatLoading ? 'opacity-60' : 'opacity-100'}`}
                   />
+                  {isViewingHistory && (
+                    <div className="absolute top-2 left-2 bg-black/50 text-white text-xs px-2 py-1 rounded-lg backdrop-blur-sm">
+                      Viewing past version
+                    </div>
+                  )}
                   {chatLoading && (
                     <div className="absolute inset-0 rounded-xl flex flex-col items-center justify-center gap-2 bg-white/30 backdrop-blur-[2px]">
                       <div className="flex gap-2">
@@ -507,43 +519,48 @@ export default function Home() {
               {/* Generation history strip */}
               {genHistory.length > 0 && (
                 <div className="flex flex-col gap-1.5">
-                  <p className="text-xs text-stone-400 font-medium">Previous versions</p>
+                  <p className="text-xs text-stone-400 font-medium">Versions</p>
                   <div className="flex gap-2 overflow-x-auto pb-1">
-                    {genHistory.map((h, i) => (
-                      <button
-                        key={i}
-                        onClick={() => { setGenResult(h); setIsRefinementResult(i > 0 || genHistory.length > 0) }}
-                        className="shrink-0 group relative"
-                        title={`Version ${i + 1}`}
-                      >
-                        <img
-                          src={h.image_url ?? ''}
-                          alt={`Version ${i + 1}`}
-                          className="w-16 h-16 rounded-lg object-cover border-2 border-rs-border group-hover:border-rs-amber transition-colors"
-                        />
-                        <span className="absolute bottom-1 right-1 text-[9px] bg-black/50 text-white rounded px-1 leading-tight">
-                          v{i + 1}
-                        </span>
-                      </button>
-                    ))}
+                    {genHistory.map((h, i) => {
+                      const isActive = historyView?.generation_id === h.generation_id
+                      return (
+                        <button key={i} onClick={() => setHistoryView(h)} className="shrink-0 relative" title={`Version ${i + 1}`}>
+                          <img
+                            src={h.image_url ?? ''}
+                            alt={`Version ${i + 1}`}
+                            className={`w-16 h-16 rounded-lg object-cover border-2 transition-colors ${isActive ? 'border-rs-amber' : 'border-rs-border hover:border-rs-amber/60'}`}
+                          />
+                          <span className="absolute bottom-1 right-1 text-[9px] bg-black/50 text-white rounded px-1 leading-tight">v{i + 1}</span>
+                        </button>
+                      )
+                    })}
+                    {/* Always-present "Now" thumbnail */}
+                    <button onClick={() => setHistoryView(null)} className="shrink-0 relative" title="Current version">
+                      <img
+                        src={genResult.image_url ?? ''}
+                        alt="Current"
+                        className={`w-16 h-16 rounded-lg object-cover border-2 transition-colors ${!isViewingHistory ? 'border-rs-amber' : 'border-rs-border hover:border-rs-amber/60'}`}
+                      />
+                      <span className="absolute bottom-1 right-1 text-[9px] bg-rs-amber text-white rounded px-1 leading-tight">Now</span>
+                    </button>
                   </div>
                 </div>
               )}
 
               {/* Items found — only shown for non-refinement results that have products */}
-              {!isRefinementResult && genResult.products.length > 0 && (
+              {!isRefinementResult && displayed.products.length > 0 && (
                 <>
                   <div className="flex items-center justify-between">
                     <p className="text-sm font-semibold text-rs-dark">
-                      ✓ {genResult.products.length} items found
+                      ✓ {displayed.products.length} items found
                     </p>
                     <p className="text-xs text-stone-500">
-                      Total: S${genResult.total_cost.toFixed(2)}
-                      {genResult.over_budget && <span className="text-red-500 ml-1">· over budget</span>}
+                      Total: S${displayed.total_cost.toFixed(2)}
+                      {displayed.over_budget && <span className="text-red-500 ml-1">· over budget</span>}
                     </p>
                   </div>
                   <div className="flex flex-col gap-1.5 max-h-32 overflow-y-auto">
-                    {genResult.products.map((p) => (
+                    {displayed.products.map((p) => (
                       <div key={p.product_id} className="flex items-center justify-between gap-2 text-xs">
                         <span className="truncate flex-1 text-stone-700">{p.name}</span>
                         <span className="text-rs-amber font-medium shrink-0">S${p.price.toFixed(2)}</span>
@@ -614,7 +631,8 @@ export default function Home() {
                 </p>
               </div>
             </div>
-          )}
+            )
+          })()}
         </div>
 
         {/* ── RIGHT: Inspirations + Style browse ───────────────────────────── */}
