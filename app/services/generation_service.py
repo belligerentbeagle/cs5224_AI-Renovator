@@ -158,6 +158,7 @@ class GenerationService:
         # Build completed response
         product_store = ProductStore(db)
         project_store = ProjectStore(db)
+        photo_store = PhotoStore(db)
 
         products: list[GeneratedProduct] = []
         total = 0.0
@@ -180,7 +181,12 @@ class GenerationService:
         over_budget = total > budget_limit if budget_limit else False
 
         if gen.generated_photo_id:
-            image_url = f"https://{_S3_BUCKET}.s3.{_AWS_REGION}.amazonaws.com/generations/{gen.design_id}/output.jpg"
+            photo = photo_store.get_by_id(gen.generated_photo_id)
+            if photo:
+                from app.services.s3 import presign_download
+                image_url = presign_download(photo.s3_key)
+            else:
+                image_url = None
         else:
             image_url = None
 
@@ -325,7 +331,9 @@ class GenerationService:
                 generation_store.update_status(design_id, GenerationStatus.completed)
             db.commit()
 
-        except Exception:
+        except Exception as e:
+            import logging
+            logging.getLogger(__name__).exception("Background generation pipeline completely failed for design_id %s", design_id)
             db.rollback()
             gen = generation_store.get_by_id(design_id)
             if gen:

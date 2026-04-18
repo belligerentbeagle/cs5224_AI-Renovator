@@ -1,67 +1,143 @@
-# AI Renovator — Backend
+# RoomStyle AI — Developer Guide
 
 ## Local Development
 
+Two servers run in parallel: the **FastAPI backend** (uvicorn) and the **React frontend** (Vite).
+
 ### Prerequisites
 
-- [uv](https://docs.astral.sh/uv/getting-started/installation/) (`pip install uv` or `brew install uv`)
-- Python 3.12 (uv will use it automatically if available; install via `pyenv install 3.12.0` if needed)
+| Tool | Install |
+|------|---------|
+| Python 3.12 | `pyenv install 3.12.0` |
+| [uv](https://docs.astral.sh/uv/getting-started/installation/) | `pip install uv` or `brew install uv` |
+| Node.js 18+ | `brew install node` or [nodejs.org](https://nodejs.org) |
 
-### 1. Clone and enter the directory
+---
 
-```bash
-git clone <repo-url>
-cd cs5224_AI-Renovator
-```
+## Backend
 
-### 2. Install dependencies
+### 1. Install Python dependencies
 
 ```bash
 uv sync
 ```
 
-This creates a `.venv` and installs all packages from `uv.lock`.
-
-### 3. Sync database schema with AWS RDS
-
-Before deploying, ensure your database schema is up to date:
-
-```bash
-python sync_schema.py
-```
-
-This will create all tables defined in your SQLAlchemy models in the RDS database.
-
-### 5. Configure environment variables
+### 2. Configure environment
 
 ```bash
 cp .env.example .env
 ```
 
-Then edit `.env` and fill in your values:
+Fill in `.env` with the local settings you need:
 
 ```
 GEMINI_API_KEY=your-gemini-api-key-here
+DATABASE_URL=postgresql://<DB_USER>:<DB_PASSWORD>@<RDS_ENDPOINT>:5432/<DB_NAME>?sslmode=require
+JWT_SECRET=any-random-string-for-local-dev
+AWS_REGION=ap-southeast-1
+S3_BUCKET=roomstyle-cs5224
 ```
 
-### 4. Run the server
+> **No DB yet?** The `/products` and `/products/from-url` endpoints work without a database (they hit the IKEA API directly). Auth, projects, and generation require `DATABASE_URL` to be set to a live RDS instance.
+
+### 3. Apply the database schema (first time only)
+
+```bash
+uv run python sync_schema.py
+```
+
+If you prefer `psql`, use your own RDS username, password, and database name rather than hardcoded sample credentials.
+
+### 4. Run the backend
 
 ```bash
 uv run uvicorn app.main:app --reload
 ```
 
-The API will be available at `http://localhost:8000`.  
-Interactive docs: `http://localhost:8000/docs`
+API available at `http://localhost:8000` — interactive docs at `http://localhost:8000/docs`
 
 ---
 
-### Key endpoints
+## Frontend
+
+### 1. Install Node dependencies
+
+```bash
+cd frontend
+npm install
+```
+
+### 2. Configure environment
+
+```bash
+cp .env.example .env
+```
+
+The default `.env` points to the local backend:
+
+```
+VITE_API_URL=http://localhost:8000
+```
+
+For the deployed Lambda backend, change this to the API Gateway URL:
+
+```
+VITE_API_URL=https://dopwgelhc8.execute-api.ap-southeast-1.amazonaws.com/default/roomstyle-backend-api
+```
+
+### 3. Run the frontend
+
+```bash
+npm run dev
+```
+
+Frontend available at `http://localhost:5173`
+
+---
+
+## Running both together (recommended)
+
+Open two terminal tabs from the project root:
+
+**Tab 1 — Backend:**
+```bash
+uv run uvicorn app.main:app --reload
+```
+
+**Tab 2 — Frontend:**
+```bash
+cd frontend && npm run dev
+```
+
+Then open `http://localhost:5173`.
+
+---
+
+## What works without a database
+
+| Feature | Needs DB? |
+|---------|-----------|
+| Browse Furniture (IKEA search) | No |
+| URL indexer (`POST /products/from-url`) | No |
+| Sign in / Register | Yes |
+| My Projects | Yes |
+| Generate AI Design | Yes |
+
+---
+
+## Key API endpoints
 
 | Method | Path | Description |
 |--------|------|-------------|
 | `GET` | `/products?q=sofa&source=ikea` | Search IKEA products |
 | `GET` | `/products/{id}` | Get product detail |
 | `POST` | `/products/from-url` | Scrape + normalise any furniture URL |
+| `POST` | `/auth/register` | Create account |
+| `POST` | `/auth/login` | Sign in, returns JWT |
+| `POST` | `/projects` | Create project (auth required) |
+| `POST` | `/generate/room` | Start generation job with selected furniture (auth required) |
+| `POST` | `/generate/design-for-me` | Start auto-furnished generation job (auth required) |
+| `GET` | `/generations/{id}` | Poll generation status |
 | `GET` | `/health` | Health check |
 
 #### POST /products/from-url
@@ -87,7 +163,7 @@ This document summarizes the initial cloud environment established for the RoomS
 | Field              | Value                                            |
 | ------------------ | ------------------------------------------------ |
 | Login URL          | https://cs5224-nus.signin.aws.amazon.com/console |
-| Temporary Password | `RoomStyle2026!`                                 |
+| Temporary Password | Set individually and distribute through a secure channel |
 
 > **Note:** All team members must ensure they are operating within the **Singapore (`ap-southeast-1`)** region to maintain consistency with the provisioned resources.
 
@@ -114,12 +190,12 @@ The system uses a decoupled storage layer for managing room imagery.
 
 A relational database handles structured application data including users, projects, and design results.
 
-| Field              | Value             |
-| ------------------ | ----------------- |
-| Database Name      | `roomstyle_db`    |
-| Master Username    | `postgres_admin`  |
-| Master Password    | `RoomStyle2026!`  |
-| VPC Security Group | `roomstyle-db-sg` |
+| Field              | Value |
+| ------------------ | ----- |
+| Database Name      | Provisioned in RDS for the project environment |
+| Master Username    | Stored privately by the team |
+| Master Password    | Stored privately by the team |
+| VPC Security Group | Project RDS security group |
 
 **Implementation:** Provisioned as a PostgreSQL instance to support the Fiscal Architect and Global Product Catalogue features.
 
@@ -165,3 +241,13 @@ The current setup is optimised for rapid prototyping and cost-efficiency. The fo
 
 - **AWS Amplify:** Connect the GitHub repository to AWS Amplify to enable automated frontend hosting and content delivery.
 - **Dependency Management:** Use Poetry to lock environment versions and ensure consistency across development and production Lambda environments.
+
+
+## Database Intricacies
+
+RDS Proxy (important since we're using Lambda):
+Lambda functions can spin up many concurrent connections and exhaust your database's connection limit. Go to RDS → Proxies → Create proxy, point it at your RDS instance, and configure it to pull credentials from Secrets Manager. Your Lambda functions then connect to the proxy endpoint instead of the database directly.
+
+## Security note
+
+Do not commit live AWS passwords, database passwords, API keys, or temporary console credentials into this repository. Keep them in `.env`, AWS Secrets Manager, or another team-approved secret store.

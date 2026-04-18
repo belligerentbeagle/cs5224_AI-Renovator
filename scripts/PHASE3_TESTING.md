@@ -10,7 +10,7 @@ Fill in `.env` at the project root before running anything:
 
 ```env
 GEMINI_API_KEY=...
-DATABASE_URL=postgresql://postgres_admin:RoomStyle2026!@roomstyle-db.chagyeom0qtj.ap-southeast-1.rds.amazonaws.com:5432/postgres?sslmode=require
+DATABASE_URL=postgresql://<DB_USER>:<DB_PASSWORD>@<RDS_ENDPOINT>:5432/<DB_NAME>?sslmode=require
 JWT_SECRET=...
 AWS_REGION=ap-southeast-1
 S3_BUCKET=roomstyle-cs5224

@@ -15,7 +15,14 @@ _SECRET_KEY = os.environ.get("JWT_SECRET", "change-me-in-production")
 _ALGORITHM = "HS256"
 _EXPIRE_HOURS = 24
 
-_pwd = CryptContext(schemes=["bcrypt"], deprecated="auto")
+# Use pbkdf2_sha256 for new hashes so local MVP flows don't rely on a fragile
+# bcrypt binary/backend combination, but keep bcrypt enabled for verifying
+# existing hashes during a gradual migration.
+_pwd = CryptContext(
+    schemes=["pbkdf2_sha256", "bcrypt"],
+    default="pbkdf2_sha256",
+    deprecated=["bcrypt"],
+)
 _bearer = HTTPBearer()
 
 

@@ -1,5 +1,5 @@
 -- RoomStyle PostgreSQL Schema
--- Apply with: psql -h <RDS_ENDPOINT> -U roomstyle_admin -d roomstyle -f schema.sql
+-- Apply with: uv run python sync_schema.py
 
 CREATE TYPE generation_status AS ENUM ('pending', 'completed', 'failed');
 
