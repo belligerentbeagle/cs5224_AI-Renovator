@@ -4,6 +4,7 @@ import { indexFromUrl, searchProducts, createProject, presignUpload, uploadFileT
 import { Product, GenerationDone } from '../types'
 
 type ChatMessage = { text: string; status: 'refining' | 'done' | 'failed' }
+type DesignMode = 'manual' | 'design_for_me'
 
 const STYLES = ['Modern', 'Scandinavian', 'Cozy Warm', 'Futuristic', 'Nature', 'Industrial']
 
@@ -38,6 +39,7 @@ function TypingDots() {
 
 export default function Home() {
   const { token } = useAuth()
+  const [designMode, setDesignMode] = useState<DesignMode>('manual')
 
   // ── Furniture selection ────────────────────────────────────────────────────
   const [leftTab, setLeftTab] = useState<LeftTab>('url')
@@ -49,6 +51,8 @@ export default function Home() {
   const [browseQuery, setBrowseQuery] = useState('')
   const [browseLoading, setBrowseLoading] = useState(false)
   const [budgetLimit, setBudgetLimit] = useState<string>('')
+  const [designBrief, setDesignBrief] = useState('')
+  const [hasSubmittedDesignBrief, setHasSubmittedDesignBrief] = useState(false)
 
   // ── Room upload ────────────────────────────────────────────────────────────
   const [roomFile, setRoomFile] = useState<File | null>(null)
@@ -129,8 +133,7 @@ export default function Home() {
     if (selectedItems.find((p) => p.product_id === product.product_id)) return
     
     // Check budget
-    const currentTotal = selectedItems.reduce((sum, item) => sum + item.price, 0)
-    const newTotal = currentTotal + product.price
+    const newTotal = selectedItemsTotal + product.price
     if (budgetLimit && newTotal > Number(budgetLimit)) {
       alert(`Warning: Adding this item will put you over your budget of S$${budgetLimit}!`)
     }
@@ -166,9 +169,13 @@ export default function Home() {
       alert('Please upload a room photo before generating.')
       return
     }
+    if (isManualMode && selectedItems.length === 0) {
+      alert('Select at least one furniture item or switch to Design For Me.')
+      return
+    }
 
-    if (budgetLimit) {
-      const totalCost = selectedItems.reduce((acc, item) => acc + item.price, 0)
+    if (budgetLimit && isManualMode) {
+      const totalCost = selectedItemsTotal
       if (totalCost > Number(budgetLimit)) {
         const proceed = window.confirm(`Warning: The total cost of the selected furniture (S$${totalCost.toFixed(2)}) exceeds your budget of S$${budgetLimit}! Do you still want to proceed with generation?`)
         if (!proceed) return
@@ -183,6 +190,9 @@ export default function Home() {
     setChatMessages([])
     setUrlError('')
     setGenStatus('Creating project…')
+    if (!isManualMode) {
+      setHasSubmittedDesignBrief(true)
+    }
 
     try {
       // 1. Create project
@@ -203,17 +213,20 @@ export default function Home() {
       }
 
       // 3. Kick off generation
-      const promptText = selectedItems.length > 0
+      const trimmedDesignBrief = designBrief.trim()
+      const promptText = isManualMode
         ? `Place only the selected furniture into the room in a ${selectedStyle.toLowerCase()} style.`
-        : `Create a ${selectedStyle.toLowerCase()} living room concept for this space.`
+        : trimmedDesignBrief
+          ? `Create a ${selectedStyle.toLowerCase()} living room concept for this space. Design brief: ${trimmedDesignBrief}`
+          : `Create a ${selectedStyle.toLowerCase()} living room concept for this space.`
 
       setGenStatus(
-        selectedItems.length > 0
+        isManualMode
           ? 'Generating room with selected furniture…'
           : 'Generating design concept…',
       )
 
-      const gen = selectedItems.length > 0
+      const gen = isManualMode
         ? await generateRoom(
             token,
             project.project_id,
@@ -255,6 +268,9 @@ export default function Home() {
         throw new Error('Generation timed out. Please try again.')
       }
     } catch (err: unknown) {
+      if (!isManualMode) {
+        setHasSubmittedDesignBrief(false)
+      }
       const msg = 'Generation failed: ' + (err instanceof Error ? err.message : 'unknown error')
       setGenStatus(msg)
       alert(msg)
@@ -347,6 +363,8 @@ export default function Home() {
   }, [chatMessages])
 
   const isSelected = (id: string) => selectedItems.some((p) => p.product_id === id)
+  const isManualMode = designMode === 'manual'
+  const selectedItemsTotal = selectedItems.reduce((acc, item) => acc + item.price, 0)
 
   return (
     <main className="max-w-7xl mx-auto px-4 py-6">
@@ -362,8 +380,26 @@ export default function Home() {
         {/* ── LEFT: Add Furniture ───────────────────────────────────────────── */}
         <div className="card p-4 flex flex-col gap-4">
           <h2 className="font-semibold text-sm text-stone-700">
-            1. Add Furniture Options (URL/Upload)
+            1. Choose Design Mode
           </h2>
+
+          <div className="flex gap-1 bg-cream rounded-xl p-1">
+            {([
+              ['manual', 'Use My Items', 'Pick the exact furniture you want placed in the room.'],
+              ['design_for_me', 'Design For Me', 'Let RoomStyle choose furniture based on your style and budget.'],
+            ] as const).map(([mode, label, description]) => (
+              <button
+                key={mode}
+                onClick={() => setDesignMode(mode)}
+                className={`flex-1 rounded-lg px-3 py-2 text-left transition-colors ${
+                  designMode === mode ? 'bg-white shadow-sm' : 'text-stone-500 hover:text-stone-700'
+                }`}
+              >
+                <p className="text-xs font-semibold text-rs-dark">{label}</p>
+                <p className="mt-1 text-[11px] leading-4 text-stone-500">{description}</p>
+              </button>
+            ))}
+          </div>
 
           <div className="flex flex-col gap-1">
             <label className="text-xs text-stone-500 font-medium">Total Budget (S$)</label>
@@ -376,138 +412,167 @@ export default function Home() {
             />
           </div>
 
-          {/* Tab switcher */}
-          <div className="flex gap-1 bg-cream rounded-xl p-1">
-            {([['url', 'Product Link'], ['browse', 'Browse Catalogue']] as const).map(([tab, label]) => (
-              <button
-                key={tab}
-                onClick={() => setLeftTab(tab)}
-                className={`flex-1 py-1.5 rounded-lg text-xs font-medium transition-colors ${
-                  leftTab === tab ? 'bg-white text-rs-dark shadow-sm' : 'text-stone-500 hover:text-stone-700'
-                }`}
-              >
-                {label}
-              </button>
-            ))}
-          </div>
-
-          {leftTab === 'url' ? (
-            <form onSubmit={handleAddUrl} className="flex flex-col gap-2">
-              <div className="flex gap-2">
-                <input
-                  className="input flex-1 text-sm"
-                  placeholder="Paste furniture link here…"
-                  value={urlInput}
-                  onChange={(e) => setUrlInput(e.target.value)}
-                  disabled={urlLoading}
-                />
-                <button
-                  type="submit"
-                  disabled={urlLoading || selectedItems.length >= 5}
-                  className="btn-primary text-sm px-4"
-                >
-                  {urlLoading ? '…' : 'Add'}
-                </button>
-              </div>
-              {urlError && <p className="text-red-500 text-xs">{urlError}</p>}
-              <p className="text-xs text-stone-400">Supports IKEA, Taobao, or any product page</p>
-            </form>
-          ) : (
-            <form onSubmit={handleBrowseSearch} className="flex gap-2">
-              <input
-                className="input flex-1 text-sm"
-                placeholder={`Search (default: ${selectedStyle})`}
-                value={browseQuery}
-                onChange={(e) => setBrowseQuery(e.target.value)}
-              />
-              <button type="submit" disabled={browseLoading} className="btn-primary text-sm px-3">
-                {browseLoading ? '…' : '🔍'}
-              </button>
-            </form>
-          )}
-
-          {/* Browse results */}
-          {leftTab === 'browse' && browseResults.length > 0 && (
-            <div className="flex flex-col gap-2 max-h-56 overflow-y-auto">
-              {browseResults.slice(0, 10).map((p) => (
-                <div key={p.product_id} className="flex items-center gap-2 p-2 rounded-xl border border-rs-border bg-cream/40">
-                  {p.image_url
-                    ? <img src={p.image_url} className="w-10 h-10 rounded-lg object-cover bg-stone-100 shrink-0" alt="" />
-                    : <div className="w-10 h-10 rounded-lg bg-cream flex items-center justify-center text-lg shrink-0">🛋️</div>}
-                  <div className="flex-1 min-w-0">
-                    {p.buy_url ? (
-                      <a href={p.buy_url} target="_blank" rel="noopener noreferrer" className="text-xs font-medium truncate hover:underline hover:text-rs-amber block">
-                        {p.name}
-                      </a>
-                    ) : (
-                      <p className="text-xs font-medium truncate">{p.name}</p>
-                    )}
-                    <p className="text-xs text-rs-amber">S${p.price.toFixed(2)}</p>
-                  </div>
+          {isManualMode ? (
+            <>
+              {/* Tab switcher */}
+              <div className="flex gap-1 bg-cream rounded-xl p-1">
+                {([['url', 'Product Link'], ['browse', 'Browse Catalogue']] as const).map(([tab, label]) => (
                   <button
-                    onClick={() => addItem(p)}
-                    disabled={isSelected(p.product_id) || selectedItems.length >= 5}
-                    className="btn-primary text-xs py-1 px-2 shrink-0"
+                    key={tab}
+                    onClick={() => setLeftTab(tab)}
+                    className={`flex-1 py-1.5 rounded-lg text-xs font-medium transition-colors ${
+                      leftTab === tab ? 'bg-white text-rs-dark shadow-sm' : 'text-stone-500 hover:text-stone-700'
+                    }`}
                   >
-                    {isSelected(p.product_id) ? '✓' : '+'}
+                    {label}
                   </button>
-                </div>
-              ))}
-            </div>
-          )}
-
-          {/* Selected items */}
-          <div>
-            <div className="flex justify-between items-end mb-2">
-              <p className="text-xs text-stone-500">
-                Selected Items ({selectedItems.length}/5)
-              </p>
-              <p className={`text-xs font-medium ${
-                budgetLimit && selectedItems.reduce((acc, item) => acc + item.price, 0) > Number(budgetLimit)
-                  ? 'text-red-500'
-                  : 'text-stone-500'
-              }`}>
-                Total: S${selectedItems.reduce((acc, item) => acc + item.price, 0).toFixed(2)}
-                {budgetLimit ? ` / S$${budgetLimit}` : ''}
-              </p>
-            </div>
-            {selectedItems.length === 0 ? (
-              <p className="text-xs text-stone-400 italic">No items selected yet</p>
-            ) : (
-              <div className="flex flex-wrap gap-2">
-                {selectedItems.map((item) => (
-                  <div key={item.product_id} className="relative group">
-                    <div className="w-16 h-16 rounded-xl overflow-hidden border border-rs-border bg-cream">
-                      {item.image_url
-                        ? <img src={item.image_url} className="w-full h-full object-cover" alt={item.name} />
-                        : <div className="w-full h-full flex items-center justify-center text-2xl">🛋️</div>}
-                    </div>
-                    <button
-                      onClick={() => removeItem(item.product_id)}
-                      className="absolute -top-1.5 -right-1.5 w-4 h-4 bg-stone-700 text-white rounded-full text-xs leading-none hidden group-hover:flex items-center justify-center"
-                    >
-                      ×
-                    </button>
-                    {item.buy_url ? (
-                      <a href={item.buy_url} target="_blank" rel="noopener noreferrer" className="text-xs text-center mt-0.5 w-16 truncate text-stone-600 hover:underline hover:text-rs-amber block mx-auto">
-                        {item.name}
-                      </a>
-                    ) : (
-                      <p className="text-xs text-center mt-0.5 w-16 truncate text-stone-600">{item.name}</p>
-                    )}
-                  </div>
                 ))}
               </div>
-            )}
-          </div>
 
-          {selectedItems.length < 5 && (
-            <button
-              onClick={() => setLeftTab('browse')}
-              className="btn-secondary text-xs w-full"
-            >
-              + Add More Items
-            </button>
+              {leftTab === 'url' ? (
+                <form onSubmit={handleAddUrl} className="flex flex-col gap-2">
+                  <div className="flex gap-2">
+                    <input
+                      className="input flex-1 text-sm"
+                      placeholder="Paste furniture link here…"
+                      value={urlInput}
+                      onChange={(e) => setUrlInput(e.target.value)}
+                      disabled={urlLoading}
+                    />
+                    <button
+                      type="submit"
+                      disabled={urlLoading || selectedItems.length >= 5}
+                      className="btn-primary text-sm px-4"
+                    >
+                      {urlLoading ? '…' : 'Add'}
+                    </button>
+                  </div>
+                  {urlError && <p className="text-red-500 text-xs">{urlError}</p>}
+                  <p className="text-xs text-stone-400">Supports IKEA, Taobao, or any product page</p>
+                </form>
+              ) : (
+                <form onSubmit={handleBrowseSearch} className="flex gap-2">
+                  <input
+                    className="input flex-1 text-sm"
+                    placeholder={`Search (default: ${selectedStyle})`}
+                    value={browseQuery}
+                    onChange={(e) => setBrowseQuery(e.target.value)}
+                  />
+                  <button type="submit" disabled={browseLoading} className="btn-primary text-sm px-3">
+                    {browseLoading ? '…' : '🔍'}
+                  </button>
+                </form>
+              )}
+
+              {/* Browse results */}
+              {leftTab === 'browse' && browseResults.length > 0 && (
+                <div className="flex flex-col gap-2 max-h-56 overflow-y-auto">
+                  {browseResults.slice(0, 10).map((p) => (
+                    <div key={p.product_id} className="flex items-center gap-2 p-2 rounded-xl border border-rs-border bg-cream/40">
+                      {p.image_url
+                        ? <img src={p.image_url} className="w-10 h-10 rounded-lg object-cover bg-stone-100 shrink-0" alt="" />
+                        : <div className="w-10 h-10 rounded-lg bg-cream flex items-center justify-center text-lg shrink-0">🛋️</div>}
+                      <div className="flex-1 min-w-0">
+                        {p.buy_url ? (
+                          <a href={p.buy_url} target="_blank" rel="noopener noreferrer" className="text-xs font-medium truncate hover:underline hover:text-rs-amber block">
+                            {p.name}
+                          </a>
+                        ) : (
+                          <p className="text-xs font-medium truncate">{p.name}</p>
+                        )}
+                        <p className="text-xs text-rs-amber">S${p.price.toFixed(2)}</p>
+                      </div>
+                      <button
+                        onClick={() => addItem(p)}
+                        disabled={isSelected(p.product_id) || selectedItems.length >= 5}
+                        className="btn-primary text-xs py-1 px-2 shrink-0"
+                      >
+                        {isSelected(p.product_id) ? '✓' : '+'}
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              {/* Selected items */}
+              <div>
+                <div className="flex justify-between items-end mb-2">
+                  <p className="text-xs text-stone-500">
+                    Selected Items ({selectedItems.length}/5)
+                  </p>
+                  <p className={`text-xs font-medium ${
+                    budgetLimit && selectedItemsTotal > Number(budgetLimit)
+                      ? 'text-red-500'
+                      : 'text-stone-500'
+                  }`}>
+                    Total: S${selectedItemsTotal.toFixed(2)}
+                    {budgetLimit ? ` / S$${budgetLimit}` : ''}
+                  </p>
+                </div>
+                {selectedItems.length === 0 ? (
+                  <p className="text-xs text-stone-400 italic">No items selected yet</p>
+                ) : (
+                  <div className="flex flex-wrap gap-2">
+                    {selectedItems.map((item) => (
+                      <div key={item.product_id} className="relative group">
+                        <div className="w-16 h-16 rounded-xl overflow-hidden border border-rs-border bg-cream">
+                          {item.image_url
+                            ? <img src={item.image_url} className="w-full h-full object-cover" alt={item.name} />
+                            : <div className="w-full h-full flex items-center justify-center text-2xl">🛋️</div>}
+                        </div>
+                        <button
+                          onClick={() => removeItem(item.product_id)}
+                          className="absolute -top-1.5 -right-1.5 w-4 h-4 bg-stone-700 text-white rounded-full text-xs leading-none hidden group-hover:flex items-center justify-center"
+                        >
+                          ×
+                        </button>
+                        {item.buy_url ? (
+                          <a href={item.buy_url} target="_blank" rel="noopener noreferrer" className="text-xs text-center mt-0.5 w-16 truncate text-stone-600 hover:underline hover:text-rs-amber block mx-auto">
+                            {item.name}
+                          </a>
+                        ) : (
+                          <p className="text-xs text-center mt-0.5 w-16 truncate text-stone-600">{item.name}</p>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+
+              {selectedItems.length < 5 && (
+                <button
+                  onClick={() => setLeftTab('browse')}
+                  className="btn-secondary text-xs w-full"
+                >
+                  + Add More Items
+                </button>
+              )}
+            </>
+          ) : (
+            <>
+              {!hasSubmittedDesignBrief && (
+                <div className="rounded-2xl border border-rs-border bg-white p-4">
+                  <div className="flex flex-col gap-2">
+                    <label htmlFor="design-brief" className="text-xs font-medium text-stone-600">
+                      Initial Design Brief
+                    </label>
+                    <textarea
+                      id="design-brief"
+                      className="input min-h-[104px] resize-none py-3 text-sm leading-5"
+                      placeholder="Describe what you want for the first concept, like cozy Scandinavian with more natural wood, soft lighting, and minimal clutter."
+                      value={designBrief}
+                      onChange={(e) => setDesignBrief(e.target.value)}
+                    />
+                    {selectedItems.length > 0 && (
+                      <p className="text-xs leading-5 text-stone-400">
+                        You still have {selectedItems.length} saved item{selectedItems.length === 1 ? '' : 's'} from manual mode.
+                        Switch back to <span className="font-medium text-rs-dark">Use My Items</span> to use them.
+                      </p>
+                    )}
+                  </div>
+                </div>
+              )}
+            </>
           )}
         </div>
 
@@ -561,11 +626,15 @@ export default function Home() {
             className="btn-primary w-full flex items-center justify-center gap-2 py-3"
           >
             <span>✨</span>
-            <span>{generating ? genStatus || 'Generating…' : 'Generate AI Visualization'}</span>
+            <span>{generating ? genStatus || 'Generating…' : isManualMode ? 'Generate With My Items' : 'Generate Design For Me'}</span>
             {!generating && <span>→</span>}
           </button>
           <p className="text-xs text-stone-400 text-center -mt-2">
-            {token ? 'Estimated time: 30–60 seconds' : 'Sign in to generate designs'}
+            {token
+              ? isManualMode
+                ? 'Estimated time: 30–60 seconds with your selected furniture'
+                : 'Estimated time: 30–60 seconds with auto-selected furniture'
+              : 'Sign in to generate designs'}
           </p>
 
           {/* Generation result */}
@@ -791,12 +860,21 @@ export default function Home() {
                     setLeftTab('browse')
                   } finally { setBrowseLoading(false) }
                 }}
-                className="text-xs text-rs-amber hover:text-rs-dark font-medium"
+                disabled={!isManualMode}
+                className={`text-xs font-medium ${
+                  isManualMode
+                    ? 'text-rs-amber hover:text-rs-dark'
+                    : 'text-stone-300 cursor-not-allowed'
+                }`}
               >
                 {browseLoading ? 'Loading…' : `Load ${selectedStyle}`}
               </button>
             </div>
-            {browseResults.length > 0 ? (
+            {!isManualMode ? (
+              <p className="text-xs text-stone-400 italic">
+                Quick Browse is available in Use My Items mode.
+              </p>
+            ) : browseResults.length > 0 ? (
               <div className="flex flex-col gap-2 max-h-64 overflow-y-auto">
                 {browseResults.slice(0, 6).map((p) => (
                   <div key={p.product_id} className="flex items-center gap-2 p-1.5 rounded-xl border border-rs-border bg-cream/30 hover:bg-cream/70 transition-colors">
