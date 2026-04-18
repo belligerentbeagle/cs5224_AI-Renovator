@@ -59,6 +59,12 @@ class DesignForMeRequest(BaseModel):
     prompt_text: str | None = None
 
 
+class RefineRequest(BaseModel):
+    """Chat refinement: update an existing generation with a natural-language instruction."""
+    generation_id: UUID
+    message: str
+
+
 # ── Routes ────────────────────────────────────────────────────────────────────
 
 @router.post("/generate/room", response_model=GenerationPending, status_code=202)
@@ -113,6 +119,36 @@ async def design_for_me(
         body.style_name,
         [],
         body.prompt_text,
+    )
+    return result
+
+
+@router.post("/generate/refine", response_model=GenerationPending, status_code=202)
+async def refine_generation(
+    body: RefineRequest,
+    background_tasks: BackgroundTasks,
+    db: DB,
+    current_user: CurrentUser,
+):
+    from app.services.refine_service import RefineService
+    from app.models.orm import DesignGeneration
+
+    refine_service = RefineService()
+    gen_service = GenerationService()
+
+    result = refine_service.submit_refine(body.generation_id, body.message, current_user, db)
+
+    # Fetch the new generation to get refined style/prompt for the pipeline
+    new_gen = db.query(DesignGeneration).filter(
+        DesignGeneration.design_id == result.generation_id
+    ).first()
+
+    background_tasks.add_task(
+        gen_service.run_generation_pipeline,
+        str(result.generation_id),
+        new_gen.style_name if new_gen else "Modern",
+        [],  # auto-search IKEA with the refined style
+        new_gen.prompt_text if new_gen else None,
     )
     return result
 

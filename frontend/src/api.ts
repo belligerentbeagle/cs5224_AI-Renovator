@@ -131,6 +131,12 @@ export const designForMe = (
 export const pollGeneration = (token: string, generationId: string) =>
   request<import('./types').GenerationResult>(`/generations/${generationId}`, undefined, token)
 
+export const refineGeneration = (token: string, generation_id: string, message: string) =>
+  request<import('./types').GenerationPending>('/generate/refine', {
+    method: 'POST',
+    body: JSON.stringify({ generation_id, message }),
+  }, token)
+
 // ── Cart ──────────────────────────────────────────────────────────────────────
 
 export const getCart = (token: string, projectId: string) =>

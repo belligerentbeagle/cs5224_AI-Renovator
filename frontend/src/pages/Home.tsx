@@ -1,7 +1,9 @@
-import { useState, useRef, useCallback } from 'react'
+import { useState, useRef, useCallback, useEffect } from 'react'
 import { useAuth } from '../context/AuthContext'
-import { indexFromUrl, searchProducts, createProject, presignUpload, uploadFileToS3, generateRoom, designForMe, pollGeneration } from '../api'
+import { indexFromUrl, searchProducts, createProject, presignUpload, uploadFileToS3, generateRoom, designForMe, pollGeneration, refineGeneration } from '../api'
 import { Product, GenerationDone } from '../types'
+
+type ChatMessage = { text: string; status: 'refining' | 'done' | 'failed' }
 
 const STYLES = ['Modern', 'Scandinavian', 'Cozy Warm', 'Futuristic', 'Nature', 'Industrial']
 const STYLE_COLORS: Record<string, string> = {
@@ -41,6 +43,12 @@ export default function Home() {
   const [generating, setGenerating] = useState(false)
   const [genStatus, setGenStatus] = useState('')
   const [genResult, setGenResult] = useState<GenerationDone | null>(null)
+
+  // ── Chat / refinement ─────────────────────────────────────────────────────
+  const [chatMessages, setChatMessages] = useState<ChatMessage[]>([])
+  const [chatInput, setChatInput] = useState('')
+  const [chatLoading, setChatLoading] = useState(false)
+  const chatEndRef = useRef<HTMLDivElement>(null)
 
   // ── Furniture via URL ──────────────────────────────────────────────────────
   async function handleAddUrl(e: React.FormEvent) {
@@ -186,6 +194,52 @@ export default function Home() {
       setGenerating(false)
     }
   }
+
+  // ── Refine (chat) ─────────────────────────────────────────────────────────
+  async function handleRefine(e: React.FormEvent) {
+    e.preventDefault()
+    if (!token || !genResult || !chatInput.trim() || chatLoading) return
+
+    const text = chatInput.trim()
+    setChatInput('')
+    setChatLoading(true)
+    setChatMessages((prev) => [...prev, { text, status: 'refining' }])
+
+    try {
+      const pending = await refineGeneration(token, genResult.generation_id, text)
+
+      // Poll for the refined result
+      let attempts = 0
+      while (attempts < 30) {
+        await new Promise((r) => setTimeout(r, 2000))
+        const result = await pollGeneration(token, pending.generation_id)
+        if (result.status === 'done') {
+          setGenResult(result)
+          setChatMessages((prev) =>
+            prev.map((m, i) => i === prev.length - 1 ? { ...m, status: 'done' } : m)
+          )
+          break
+        }
+        attempts++
+      }
+      if (attempts >= 30) {
+        setChatMessages((prev) =>
+          prev.map((m, i) => i === prev.length - 1 ? { ...m, status: 'failed' } : m)
+        )
+      }
+    } catch {
+      setChatMessages((prev) =>
+        prev.map((m, i) => i === prev.length - 1 ? { ...m, status: 'failed' } : m)
+      )
+    } finally {
+      setChatLoading(false)
+    }
+  }
+
+  // Auto-scroll chat to bottom when messages update
+  useEffect(() => {
+    chatEndRef.current?.scrollIntoView({ behavior: 'smooth' })
+  }, [chatMessages])
 
   const isSelected = (id: string) => selectedItems.some((p) => p.product_id === id)
 
@@ -398,34 +452,88 @@ export default function Home() {
 
           {/* Generation result */}
           {genResult && (
-            <div className="rounded-2xl border border-rs-border bg-cream/40 p-4">
-              <p className="text-sm font-semibold text-rs-dark mb-2">
-                ✓ Design ready — {genResult.products.length} items found
-              </p>
+            <div className="rounded-2xl border border-rs-border bg-cream/40 p-4 flex flex-col gap-3">
+              {/* Generated image */}
               {genResult.image_url && (
-                <div className="mb-3">
-                  <img
-                    src={genResult.image_url}
-                    alt="Generated room preview"
-                    className="w-full h-48 object-cover rounded-xl border border-rs-border bg-stone-100"
-                  />
-                </div>
+                <img
+                  src={genResult.image_url}
+                  alt="Generated room"
+                  className="w-full rounded-xl border border-rs-border object-cover bg-stone-100"
+                />
               )}
-              {genResult.over_budget && (
-                <p className="text-xs text-red-500 mb-2">⚠ Over budget</p>
-              )}
-              <p className="text-xs text-stone-500 mb-3">
-                Total: S${genResult.total_cost.toFixed(2)}
-              </p>
-              <div className="flex flex-col gap-2 max-h-48 overflow-y-auto">
+
+              {/* Summary row */}
+              <div className="flex items-center justify-between">
+                <p className="text-sm font-semibold text-rs-dark">
+                  ✓ {genResult.products.length} items found
+                </p>
+                <p className="text-xs text-stone-500">
+                  Total: S${genResult.total_cost.toFixed(2)}
+                  {genResult.over_budget && <span className="text-red-500 ml-1">· over budget</span>}
+                </p>
+              </div>
+
+              {/* Product list */}
+              <div className="flex flex-col gap-1.5 max-h-32 overflow-y-auto">
                 {genResult.products.map((p) => (
                   <div key={p.product_id} className="flex items-center justify-between gap-2 text-xs">
-                    <span className="truncate flex-1">{p.name}</span>
+                    <span className="truncate flex-1 text-stone-700">{p.name}</span>
                     <span className="text-rs-amber font-medium shrink-0">S${p.price.toFixed(2)}</span>
                     <a href={p.buy_url} target="_blank" rel="noopener noreferrer"
-                      className="text-rs-amber underline shrink-0">Buy</a>
+                      className="text-rs-amber underline shrink-0 hover:text-rs-dark">Buy →</a>
                   </div>
                 ))}
+              </div>
+
+              {/* ── Chat refinement ─────────────────────────────────────── */}
+              <div className="border-t border-rs-border pt-3 flex flex-col gap-2">
+                {/* Message history */}
+                {chatMessages.length > 0 && (
+                  <div className="flex flex-col gap-2 max-h-36 overflow-y-auto px-0.5">
+                    {chatMessages.map((msg, i) => (
+                      <div key={i} className="flex flex-col gap-1">
+                        {/* User bubble */}
+                        <div className="self-end max-w-[85%] bg-rs-amber text-white text-xs px-3 py-1.5 rounded-2xl rounded-br-sm">
+                          {msg.text}
+                        </div>
+                        {/* Status bubble */}
+                        <div className={`self-start text-xs px-3 py-1.5 rounded-2xl rounded-bl-sm ${
+                          msg.status === 'refining'
+                            ? 'bg-stone-100 text-stone-400 animate-pulse'
+                            : msg.status === 'done'
+                            ? 'bg-stone-100 text-stone-500'
+                            : 'bg-red-50 text-red-400'
+                        }`}>
+                          {msg.status === 'refining' ? 'Refining design…'
+                            : msg.status === 'done' ? '✓ Applied'
+                            : '✗ Failed — try again'}
+                        </div>
+                      </div>
+                    ))}
+                    <div ref={chatEndRef} />
+                  </div>
+                )}
+
+                {/* Input bar */}
+                <form onSubmit={handleRefine} className="flex gap-2">
+                  <input
+                    className="input flex-1 text-xs py-2"
+                    placeholder="Refine this design… e.g. more minimal, warmer tones"
+                    value={chatInput}
+                    onChange={(e) => setChatInput(e.target.value)}
+                    disabled={chatLoading}
+                  />
+                  <button
+                    type="submit"
+                    disabled={chatLoading || !chatInput.trim()}
+                    className="btn-primary text-xs px-3 py-2 shrink-0"
+                  >
+                    {chatLoading ? '…' : '↑'}
+                  </button>
+                </form>
+                <p className="text-xs text-stone-400 text-center">
+                  Describe how to change the design — AI will regenerate it
+                </p>
               </div>
             </div>
           )}
