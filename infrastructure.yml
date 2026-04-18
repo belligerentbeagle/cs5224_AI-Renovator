@@ -1,0 +1,504 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >
+  RoomStyle AI — full infrastructure stack (ap-southeast-1).
+  Covers VPC, RDS PostgreSQL, Lambda (FastAPI+Mangum), HTTP API Gateway,
+  S3, Secrets Manager, and Amplify frontend hosting.
+
+# ── Parameters ────────────────────────────────────────────────────────────────
+Parameters:
+  DBPassword:
+    Type: String
+    NoEcho: true
+    Description: Master password for RDS PostgreSQL (roomstyle_admin)
+
+  GeminiApiKey:
+    Type: String
+    NoEcho: true
+    Description: Google Gemini API key for image generation
+
+  JWTSecret:
+    Type: String
+    NoEcho: true
+    Description: HS256 signing secret for auth tokens
+
+  GitHubRepo:
+    Type: String
+    Default: belligerentbeagle/cs5224_AI-Renovator
+    Description: GitHub repository in owner/name format
+
+  GitHubBranch:
+    Type: String
+    Default: main
+
+  GitHubToken:
+    Type: String
+    NoEcho: true
+    Description: GitHub personal access token for Amplify
+
+# ── Resources ─────────────────────────────────────────────────────────────────
+Resources:
+
+  # ── VPC ──────────────────────────────────────────────────────────────────────
+  VPC:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: 10.0.0.0/16
+      EnableDnsHostnames: true
+      EnableDnsSupport: true
+      Tags:
+        - Key: Name
+          Value: roomstyle-vpc
+
+  # Public subnets — for NAT Gateway and future load balancers
+  PublicSubnet1:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: 10.0.1.0/24
+      AvailabilityZone: !Select [0, !GetAZs '']
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: roomstyle-public-1
+
+  PublicSubnet2:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: 10.0.2.0/24
+      AvailabilityZone: !Select [1, !GetAZs '']
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: roomstyle-public-2
+
+  # Private subnets — Lambda and RDS live here
+  PrivateSubnet1:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: 10.0.3.0/24
+      AvailabilityZone: !Select [0, !GetAZs '']
+      Tags:
+        - Key: Name
+          Value: roomstyle-private-1
+
+  PrivateSubnet2:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: 10.0.4.0/24
+      AvailabilityZone: !Select [1, !GetAZs '']
+      Tags:
+        - Key: Name
+          Value: roomstyle-private-2
+
+  InternetGateway:
+    Type: AWS::EC2::InternetGateway
+    Properties:
+      Tags:
+        - Key: Name
+          Value: roomstyle-igw
+
+  VPCGatewayAttachment:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      VpcId: !Ref VPC
+      InternetGatewayId: !Ref InternetGateway
+
+  PublicRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VPC
+      Tags:
+        - Key: Name
+          Value: roomstyle-public-rt
+
+  PublicRoute:
+    Type: AWS::EC2::Route
+    DependsOn: VPCGatewayAttachment
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref InternetGateway
+
+  PublicSubnet1RTA:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PublicSubnet1
+      RouteTableId: !Ref PublicRouteTable
+
+  PublicSubnet2RTA:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PublicSubnet2
+      RouteTableId: !Ref PublicRouteTable
+
+  # NAT Gateway — required for Lambda in private subnets to reach
+  # the internet (Gemini API, IKEA API). ~$32/month fixed cost.
+  NatEIP:
+    Type: AWS::EC2::EIP
+    DependsOn: VPCGatewayAttachment
+    Properties:
+      Domain: vpc
+
+  NatGateway:
+    Type: AWS::EC2::NatGateway
+    Properties:
+      AllocationId: !GetAtt NatEIP.AllocationId
+      SubnetId: !Ref PublicSubnet1
+      Tags:
+        - Key: Name
+          Value: roomstyle-nat
+
+  PrivateRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VPC
+      Tags:
+        - Key: Name
+          Value: roomstyle-private-rt
+
+  PrivateRoute:
+    Type: AWS::EC2::Route
+    Properties:
+      RouteTableId: !Ref PrivateRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      NatGatewayId: !Ref NatGateway
+
+  PrivateSubnet1RTA:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PrivateSubnet1
+      RouteTableId: !Ref PrivateRouteTable
+
+  PrivateSubnet2RTA:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PrivateSubnet2
+      RouteTableId: !Ref PrivateRouteTable
+
+  # S3 Gateway endpoint — free; keeps S3 traffic inside AWS backbone
+  S3GatewayEndpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Properties:
+      VpcId: !Ref VPC
+      ServiceName: !Sub 'com.amazonaws.${AWS::Region}.s3'
+      VpcEndpointType: Gateway
+      RouteTableIds:
+        - !Ref PrivateRouteTable
+
+  # ── Security Groups ───────────────────────────────────────────────────────────
+  LambdaSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Allows Lambda outbound access; no inbound needed
+      VpcId: !Ref VPC
+      SecurityGroupEgress:
+        - IpProtocol: -1
+          CidrIp: 0.0.0.0/0
+      Tags:
+        - Key: Name
+          Value: roomstyle-lambda-sg
+
+  RDSSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Allows PostgreSQL from Lambda security group only
+      VpcId: !Ref VPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 5432
+          ToPort: 5432
+          SourceSecurityGroupId: !Ref LambdaSecurityGroup
+      Tags:
+        - Key: Name
+          Value: roomstyle-rds-sg
+
+  # ── S3 ────────────────────────────────────────────────────────────────────────
+  S3Bucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: roomstyle-cs5224
+      CorsConfiguration:
+        CorsRules:
+          - AllowedHeaders:
+              - '*'
+            AllowedMethods:
+              - GET
+              - PUT
+              - POST
+            AllowedOrigins:
+              - '*'
+            MaxAge: 3600
+      LifecycleConfiguration:
+        Rules:
+          - Id: expire-old-uploads
+            Status: Enabled
+            Prefix: uploads/
+            ExpirationInDays: 90
+      Tags:
+        - Key: Project
+          Value: roomstyle
+
+  # Block all public access — frontend uses presigned URLs
+  S3BucketPublicAccessBlock:
+    Type: AWS::S3::BucketPublicAccessBlock
+    Properties:
+      Bucket: !Ref S3Bucket
+      BlockPublicAcls: true
+      BlockPublicPolicy: true
+      IgnorePublicAcls: true
+      RestrictPublicBuckets: true
+
+  # ── RDS PostgreSQL ────────────────────────────────────────────────────────────
+  DBSubnetGroup:
+    Type: AWS::RDS::DBSubnetGroup
+    Properties:
+      DBSubnetGroupDescription: Private subnets for RoomStyle RDS
+      SubnetIds:
+        - !Ref PrivateSubnet1
+        - !Ref PrivateSubnet2
+
+  RDSInstance:
+    Type: AWS::RDS::DBInstance
+    DeletionPolicy: Retain
+    Properties:
+      DBInstanceIdentifier: roomstyle-db
+      DBInstanceClass: db.t3.micro
+      Engine: postgres
+      EngineVersion: '16.3'
+      MasterUsername: roomstyle_admin
+      MasterUserPassword: !Ref DBPassword
+      DBName: roomstyle
+      AllocatedStorage: '20'
+      StorageType: gp3
+      VPCSecurityGroups:
+        - !Ref RDSSecurityGroup
+      DBSubnetGroupName: !Ref DBSubnetGroup
+      PubliclyAccessible: false
+      MultiAZ: false
+      BackupRetentionPeriod: 7
+      DeletionProtection: true
+      Tags:
+        - Key: Project
+          Value: roomstyle
+
+  # ── Secrets Manager ───────────────────────────────────────────────────────────
+  AppSecrets:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Name: roomstyle/app-secrets
+      Description: Runtime secrets for the RoomStyle Lambda function
+      SecretString: !Sub |
+        {
+          "DATABASE_URL": "postgresql://roomstyle_admin:${DBPassword}@${RDSInstance.Endpoint.Address}:5432/roomstyle?sslmode=require",
+          "GEMINI_API_KEY": "${GeminiApiKey}",
+          "JWT_SECRET": "${JWTSecret}",
+          "S3_BUCKET": "roomstyle-cs5224",
+          "AWS_REGION": "${AWS::Region}"
+        }
+
+  # ── IAM ───────────────────────────────────────────────────────────────────────
+  LambdaExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: roomstyle-lambda-role
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      # Grants CreateNetworkInterface/DescribeNetworkInterfaces for VPC placement
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaVPCAccessExecutionRole
+      Policies:
+        - PolicyName: roomstyle-lambda-policy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Sid: S3Access
+                Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:PutObject
+                  - s3:DeleteObject
+                Resource: !Sub '${S3Bucket.Arn}/*'
+              - Sid: S3List
+                Effect: Allow
+                Action:
+                  - s3:ListBucket
+                Resource: !GetAtt S3Bucket.Arn
+              - Sid: SecretsAccess
+                Effect: Allow
+                Action:
+                  - secretsmanager:GetSecretValue
+                Resource: !Ref AppSecrets
+              - Sid: CloudWatchLogs
+                Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource: !Sub 'arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/roomstyle-backend-api:*'
+
+  # ── Lambda ────────────────────────────────────────────────────────────────────
+  # NOTE: The Code block below is a placeholder. Deploy the real image via:
+  #   aws lambda update-function-code \
+  #     --function-name roomstyle-backend-api \
+  #     --image-uri <ECR_URI>
+  # Or use a CI/CD pipeline (GitHub Actions → ECR → Lambda).
+  LambdaFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: roomstyle-backend-api
+      Runtime: python3.12
+      Architectures:
+        - arm64
+      Handler: app.main.handler        # Mangum ASGI adapter entry point
+      Role: !GetAtt LambdaExecutionRole.Arn
+      Timeout: 300                     # Gemini generation can take ~60s
+      MemorySize: 512
+      Code:
+        ZipFile: |
+          # Placeholder — replace via update-function-code after stack creation
+          def handler(event, context):
+              return {"statusCode": 200, "body": "placeholder"}
+      VpcConfig:
+        SecurityGroupIds:
+          - !Ref LambdaSecurityGroup
+        SubnetIds:
+          - !Ref PrivateSubnet1
+          - !Ref PrivateSubnet2
+      Environment:
+        Variables:
+          S3_BUCKET: roomstyle-cs5224
+          AWS_REGION_NAME: !Ref AWS::Region
+          SECRETS_NAME: roomstyle/app-secrets
+      Tags:
+        Project: roomstyle
+
+  LambdaLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub '/aws/lambda/${LambdaFunction}'
+      RetentionInDays: 30
+
+  # ── API Gateway (HTTP API v2) ─────────────────────────────────────────────────
+  HttpApi:
+    Type: AWS::ApiGatewayV2::Api
+    Properties:
+      Name: roomstyle-api
+      ProtocolType: HTTP
+      CorsConfiguration:
+        AllowOrigins:
+          - '*'
+        AllowMethods:
+          - GET
+          - POST
+          - PUT
+          - DELETE
+          - OPTIONS
+        AllowHeaders:
+          - Content-Type
+          - Authorization
+        MaxAge: 300
+
+  LambdaIntegration:
+    Type: AWS::ApiGatewayV2::Integration
+    Properties:
+      ApiId: !Ref HttpApi
+      IntegrationType: AWS_PROXY
+      IntegrationUri: !Sub >-
+        arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${LambdaFunction.Arn}/invocations
+      PayloadFormatVersion: '2.0'
+
+  DefaultRoute:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref HttpApi
+      RouteKey: '$default'
+      Target: !Sub 'integrations/${LambdaIntegration}'
+
+  ApiStage:
+    Type: AWS::ApiGatewayV2::Stage
+    Properties:
+      ApiId: !Ref HttpApi
+      StageName: '$default'
+      AutoDeploy: true
+
+  LambdaApiGatewayPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref LambdaFunction
+      Action: lambda:InvokeFunction
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub 'arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${HttpApi}/*/*'
+
+  # ── Amplify (frontend) ────────────────────────────────────────────────────────
+  AmplifyApp:
+    Type: AWS::Amplify::App
+    Properties:
+      Name: roomstyle-frontend
+      Repository: !Sub 'https://github.com/${GitHubRepo}'
+      AccessToken: !Ref GitHubToken
+      BuildSpec: |
+        version: 1
+        frontend:
+          phases:
+            preBuild:
+              commands:
+                - cd frontend
+                - npm ci
+            build:
+              commands:
+                - npm run build
+          artifacts:
+            baseDirectory: frontend/dist
+            files:
+              - '**/*'
+          cache:
+            paths:
+              - frontend/node_modules/**/*
+      EnvironmentVariables:
+        - Name: VITE_API_URL
+          Value: !Sub 'https://${HttpApi}.execute-api.${AWS::Region}.amazonaws.com'
+      Tags:
+        - Key: Project
+          Value: roomstyle
+
+  AmplifyBranch:
+    Type: AWS::Amplify::Branch
+    Properties:
+      AppId: !GetAtt AmplifyApp.AppId
+      BranchName: !Ref GitHubBranch
+      EnableAutoBuild: true
+      Stage: PRODUCTION
+
+# ── Outputs ───────────────────────────────────────────────────────────────────
+Outputs:
+  ApiEndpoint:
+    Description: API Gateway endpoint — set as VITE_API_URL in frontend
+    Value: !Sub 'https://${HttpApi}.execute-api.${AWS::Region}.amazonaws.com'
+
+  S3BucketName:
+    Description: S3 bucket for room photo uploads and generated images
+    Value: !Ref S3Bucket
+
+  RDSEndpoint:
+    Description: RDS PostgreSQL host — used to build DATABASE_URL
+    Value: !GetAtt RDSInstance.Endpoint.Address
+
+  AmplifyAppId:
+    Description: Amplify App ID — use in `aws amplify start-job` for manual deploys
+    Value: !GetAtt AmplifyApp.AppId
+
+  AmplifyDefaultDomain:
+    Description: Amplify-hosted frontend URL
+    Value: !GetAtt AmplifyApp.DefaultDomain
+
+  SecretsArn:
+    Description: Secrets Manager ARN containing all runtime secrets
+    Value: !Ref AppSecrets
