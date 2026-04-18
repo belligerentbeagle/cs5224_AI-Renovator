@@ -35,6 +35,10 @@ Parameters:
     NoEcho: true
     Description: GitHub personal access token for Amplify
 
+  ECRImageUri:
+    Type: String
+    Description: ECR image URI for the Lambda function (e.g. 123456789.dkr.ecr.ap-southeast-1.amazonaws.com/roomstyle:latest)
+
 # ── Resources ─────────────────────────────────────────────────────────────────
 Resources:
 
@@ -345,27 +349,18 @@ Resources:
                 Resource: !Sub 'arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/roomstyle-backend-api:*'
 
   # ── Lambda ────────────────────────────────────────────────────────────────────
-  # NOTE: The Code block below is a placeholder. Deploy the real image via:
-  #   aws lambda update-function-code \
-  #     --function-name roomstyle-backend-api \
-  #     --image-uri <ECR_URI>
-  # Or use a CI/CD pipeline (GitHub Actions → ECR → Lambda).
   LambdaFunction:
     Type: AWS::Lambda::Function
     Properties:
       FunctionName: roomstyle-backend-api
-      Runtime: python3.12
+      PackageType: Image
       Architectures:
         - arm64
-      Handler: app.main.handler        # Mangum ASGI adapter entry point
+      Code:
+        ImageUri: !Ref ECRImageUri
       Role: !GetAtt LambdaExecutionRole.Arn
       Timeout: 300                     # Gemini generation can take ~60s
       MemorySize: 512
-      Code:
-        ZipFile: |
-          # Placeholder — replace via update-function-code after stack creation
-          def handler(event, context):
-              return {"statusCode": 200, "body": "placeholder"}
       VpcConfig:
         SecurityGroupIds:
           - !Ref LambdaSecurityGroup
