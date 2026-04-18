@@ -17,6 +17,16 @@ const STYLE_COLORS: Record<string, string> = {
 
 type LeftTab = 'url' | 'browse'
 
+function TypingDots() {
+  return (
+    <span className="flex gap-0.5 items-center">
+      <span className="w-1.5 h-1.5 bg-stone-400 rounded-full animate-bounce" style={{ animationDelay: '0ms' }} />
+      <span className="w-1.5 h-1.5 bg-stone-400 rounded-full animate-bounce" style={{ animationDelay: '150ms' }} />
+      <span className="w-1.5 h-1.5 bg-stone-400 rounded-full animate-bounce" style={{ animationDelay: '300ms' }} />
+    </span>
+  )
+}
+
 export default function Home() {
   const { token } = useAuth()
 
@@ -43,12 +53,22 @@ export default function Home() {
   const [generating, setGenerating] = useState(false)
   const [genStatus, setGenStatus] = useState('')
   const [genResult, setGenResult] = useState<GenerationDone | null>(null)
+  const [isRefinementResult, setIsRefinementResult] = useState(false)
+  const [genHistory, setGenHistory] = useState<GenerationDone[]>([])
 
   // ── Chat / refinement ─────────────────────────────────────────────────────
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>([])
   const [chatInput, setChatInput] = useState('')
   const [chatLoading, setChatLoading] = useState(false)
+  const [refineElapsed, setRefineElapsed] = useState(0)
   const chatEndRef = useRef<HTMLDivElement>(null)
+
+  // Elapsed timer while a refinement is in-flight
+  useEffect(() => {
+    if (!chatLoading) { setRefineElapsed(0); return }
+    const t = setInterval(() => setRefineElapsed((s) => s + 1), 1000)
+    return () => clearInterval(t)
+  }, [chatLoading])
 
   // ── Furniture via URL ──────────────────────────────────────────────────────
   async function handleAddUrl(e: React.FormEvent) {
@@ -117,6 +137,9 @@ export default function Home() {
     }
     setGenerating(true)
     setGenResult(null)
+    setGenHistory([])
+    setIsRefinementResult(false)
+    setChatMessages([])
     setUrlError('')
     setGenStatus('Creating project…')
 
@@ -179,6 +202,7 @@ export default function Home() {
         const result = await pollGeneration(token, gen.generation_id)
         if (result.status === 'done') {
           setGenResult(result)
+          setIsRefinementResult(false)
           setGenStatus('')
           break
         }
@@ -214,7 +238,10 @@ export default function Home() {
         await new Promise((r) => setTimeout(r, 2000))
         const result = await pollGeneration(token, pending.generation_id)
         if (result.status === 'done') {
+          // Push current image to history before replacing it
+          setGenHistory((prev) => [...prev, genResult])
           setGenResult(result)
+          setIsRefinementResult(true)
           setChatMessages((prev) =>
             prev.map((m, i) => i === prev.length - 1 ? { ...m, status: 'done' } : m)
           )
@@ -453,37 +480,86 @@ export default function Home() {
           {/* Generation result */}
           {genResult && (
             <div className="rounded-2xl border border-rs-border bg-cream/40 p-4 flex flex-col gap-3">
-              {/* Generated image */}
+
+              {/* Generated image with loading overlay */}
               {genResult.image_url && (
-                <img
-                  src={genResult.image_url}
-                  alt="Generated room"
-                  className="w-full rounded-xl border border-rs-border object-cover bg-stone-100"
-                />
+                <div className="relative">
+                  <img
+                    src={genResult.image_url}
+                    alt="Generated room"
+                    className={`w-full rounded-xl border border-rs-border object-cover bg-stone-100 transition-opacity ${chatLoading ? 'opacity-60' : 'opacity-100'}`}
+                  />
+                  {chatLoading && (
+                    <div className="absolute inset-0 rounded-xl flex flex-col items-center justify-center gap-2 bg-white/30 backdrop-blur-[2px]">
+                      <div className="flex gap-2">
+                        <span className="w-2.5 h-2.5 bg-rs-amber rounded-full animate-bounce" style={{ animationDelay: '0ms' }} />
+                        <span className="w-2.5 h-2.5 bg-rs-amber rounded-full animate-bounce" style={{ animationDelay: '150ms' }} />
+                        <span className="w-2.5 h-2.5 bg-rs-amber rounded-full animate-bounce" style={{ animationDelay: '300ms' }} />
+                      </div>
+                      <p className="text-xs font-medium text-stone-600">
+                        Refining{refineElapsed > 0 ? ` (${refineElapsed}s)` : '…'}
+                      </p>
+                    </div>
+                  )}
+                </div>
               )}
 
-              {/* Summary row */}
-              <div className="flex items-center justify-between">
-                <p className="text-sm font-semibold text-rs-dark">
-                  ✓ {genResult.products.length} items found
-                </p>
-                <p className="text-xs text-stone-500">
-                  Total: S${genResult.total_cost.toFixed(2)}
-                  {genResult.over_budget && <span className="text-red-500 ml-1">· over budget</span>}
-                </p>
-              </div>
-
-              {/* Product list */}
-              <div className="flex flex-col gap-1.5 max-h-32 overflow-y-auto">
-                {genResult.products.map((p) => (
-                  <div key={p.product_id} className="flex items-center justify-between gap-2 text-xs">
-                    <span className="truncate flex-1 text-stone-700">{p.name}</span>
-                    <span className="text-rs-amber font-medium shrink-0">S${p.price.toFixed(2)}</span>
-                    <a href={p.buy_url} target="_blank" rel="noopener noreferrer"
-                      className="text-rs-amber underline shrink-0 hover:text-rs-dark">Buy →</a>
+              {/* Generation history strip */}
+              {genHistory.length > 0 && (
+                <div className="flex flex-col gap-1.5">
+                  <p className="text-xs text-stone-400 font-medium">Previous versions</p>
+                  <div className="flex gap-2 overflow-x-auto pb-1">
+                    {genHistory.map((h, i) => (
+                      <button
+                        key={i}
+                        onClick={() => { setGenResult(h); setIsRefinementResult(i > 0 || genHistory.length > 0) }}
+                        className="shrink-0 group relative"
+                        title={`Version ${i + 1}`}
+                      >
+                        <img
+                          src={h.image_url ?? ''}
+                          alt={`Version ${i + 1}`}
+                          className="w-16 h-16 rounded-lg object-cover border-2 border-rs-border group-hover:border-rs-amber transition-colors"
+                        />
+                        <span className="absolute bottom-1 right-1 text-[9px] bg-black/50 text-white rounded px-1 leading-tight">
+                          v{i + 1}
+                        </span>
+                      </button>
+                    ))}
                   </div>
-                ))}
-              </div>
+                </div>
+              )}
+
+              {/* Items found — only shown for non-refinement results that have products */}
+              {!isRefinementResult && genResult.products.length > 0 && (
+                <>
+                  <div className="flex items-center justify-between">
+                    <p className="text-sm font-semibold text-rs-dark">
+                      ✓ {genResult.products.length} items found
+                    </p>
+                    <p className="text-xs text-stone-500">
+                      Total: S${genResult.total_cost.toFixed(2)}
+                      {genResult.over_budget && <span className="text-red-500 ml-1">· over budget</span>}
+                    </p>
+                  </div>
+                  <div className="flex flex-col gap-1.5 max-h-32 overflow-y-auto">
+                    {genResult.products.map((p) => (
+                      <div key={p.product_id} className="flex items-center justify-between gap-2 text-xs">
+                        <span className="truncate flex-1 text-stone-700">{p.name}</span>
+                        <span className="text-rs-amber font-medium shrink-0">S${p.price.toFixed(2)}</span>
+                        <a href={p.buy_url} target="_blank" rel="noopener noreferrer"
+                          className="text-rs-amber underline shrink-0 hover:text-rs-dark">Buy →</a>
+                      </div>
+                    ))}
+                  </div>
+                </>
+              )}
+
+              {isRefinementResult && (
+                <p className="text-xs text-stone-400 italic text-center">
+                  Refined design — view original for furniture list
+                </p>
+              )}
 
               {/* ── Chat refinement ─────────────────────────────────────── */}
               <div className="border-t border-rs-border pt-3 flex flex-col gap-2">
@@ -497,15 +573,17 @@ export default function Home() {
                           {msg.text}
                         </div>
                         {/* Status bubble */}
-                        <div className={`self-start text-xs px-3 py-1.5 rounded-2xl rounded-bl-sm ${
+                        <div className={`self-start text-xs px-3 py-1.5 rounded-2xl rounded-bl-sm flex items-center gap-1.5 ${
                           msg.status === 'refining'
-                            ? 'bg-stone-100 text-stone-400 animate-pulse'
+                            ? 'bg-stone-100 text-stone-500'
                             : msg.status === 'done'
                             ? 'bg-stone-100 text-stone-500'
                             : 'bg-red-50 text-red-400'
                         }`}>
-                          {msg.status === 'refining' ? 'Refining design…'
-                            : msg.status === 'done' ? '✓ Applied'
+                          {msg.status === 'refining'
+                            ? <><TypingDots /><span>Refining{refineElapsed > 0 ? ` (${refineElapsed}s)` : '…'}</span></>
+                            : msg.status === 'done'
+                            ? '✓ Applied'
                             : '✗ Failed — try again'}
                         </div>
                       </div>
@@ -526,9 +604,9 @@ export default function Home() {
                   <button
                     type="submit"
                     disabled={chatLoading || !chatInput.trim()}
-                    className="btn-primary text-xs px-3 py-2 shrink-0"
+                    className="btn-primary text-xs px-3 py-2 shrink-0 flex items-center justify-center min-w-[2rem]"
                   >
-                    {chatLoading ? '…' : '↑'}
+                    {chatLoading ? <TypingDots /> : '↑'}
                   </button>
                 </form>
                 <p className="text-xs text-stone-400 text-center">
