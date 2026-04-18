@@ -102,9 +102,11 @@ def generate_room_image(
     furniture_names = ", ".join(label for _, _, label in furniture_images)
     instruction = (
         f"You are performing a precise furniture placement task — NOT a full room redesign.\n\n"
-        f"ROOM BACKGROUND — strict rules:\n"
+        f"ROOM BACKGROUND — strict rules (MY JOB DEPENDS ON THIS SO PLEASE STRICTLY FOLLOW!):\n"
         f"- Use the EXACT room from the first photo as the background. Do not alter it in any way.\n"
-        f"- Do NOT change walls, floor, ceiling, windows, doorways, skirting boards, or room dimensions.\n"
+        f"- Do NOT change walls, floor, ceiling, windows, doors, doorways, skirting boards, or room dimensions.\n"
+        f"- Do NOT remove ANY existing structural items like built-in cabinets, shelves, or architectural details.\n"
+        f"- Every single item originally present in the room image SHOULD NOT BE CHANGED. Nothing must be removed, modified, or painted over.\n"
         f"- Do NOT change the camera angle, perspective, or crop.\n\n"
         + (
             f"FURNITURE TO ADD — the ONLY change allowed:\n"
@@ -122,7 +124,7 @@ def generate_room_image(
         f"- Shelves, cabinets, or storage not in the furniture list\n"
         f"- Any object, decoration, or furniture not explicitly listed above\n\n"
         f"Style finish: {style_name}.{extra}\n\n"
-        f"The final image must show the original room with ONLY the listed furniture placed inside it — nothing else added, nothing removed."
+        f"The final image must show the original room with ONLY the listed furniture placed inside it — nothing else added, absolutely nothing else removed or changed."
     )
     parts.append(types.Part(text=instruction))
 
