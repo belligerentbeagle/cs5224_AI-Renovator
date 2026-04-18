@@ -1,41 +1,69 @@
 #!/usr/bin/env python3
+"""Apply the PostgreSQL schema in schema.sql to the configured database.
+
+This is a lightweight alternative to invoking `psql` directly, which is handy
+for local machines that do not have the PostgreSQL CLI installed.
 """
-Database schema synchronization script for AWS RDS.
-This script creates all tables defined in the SQLAlchemy models.
-"""
+
+from __future__ import annotations
 
 import os
-import sys
 from pathlib import Path
 
-# Add the app directory to Python path
-app_dir = Path(__file__).parent / "app"
-sys.path.insert(0, str(app_dir))
+import psycopg2
+from dotenv import load_dotenv
 
-from app.db import Base, _engine
-import app.models.orm  # Important: import models so they are registered with Base
-def sync_schema():
-    """Create all tables in the database based on SQLAlchemy models."""
-    print("Connecting to database...")
-    engine = _engine()
+REQUIRED_TABLES = {
+    "users",
+    "products",
+    "projects",
+    "photos",
+    "design_generations",
+    "generation_products",
+}
 
-    print("Creating tables...")
-    # This will create all tables defined in the models
-    Base.metadata.create_all(bind=engine)
 
-    print("Schema synchronization complete!")
-    print("Tables created:")
-    for table_name in Base.metadata.tables.keys():
-        print(f"  - {table_name}")
+def _existing_tables(conn) -> set[str]:
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            select table_name
+            from information_schema.tables
+            where table_schema = 'public'
+            """
+        )
+        return {row[0] for row in cur.fetchall()}
+
+
+def main() -> int:
+    load_dotenv(".env")
+
+    database_url = os.environ.get("DATABASE_URL")
+    if not database_url:
+        print("ERROR: DATABASE_URL is not set in .env")
+        return 1
+
+    schema_path = Path("schema.sql")
+    if not schema_path.exists():
+        print("ERROR: schema.sql not found")
+        return 1
+
+    sql = schema_path.read_text()
+
+    try:
+        with psycopg2.connect(database_url) as conn:
+            existing = _existing_tables(conn)
+            if REQUIRED_TABLES.issubset(existing):
+                print("Schema already present; nothing to apply.")
+                return 0
+            with conn.cursor() as cur:
+                cur.execute(sql)
+        print("Schema applied successfully.")
+        return 0
+    except Exception as exc:
+        print(f"ERROR applying schema: {exc}")
+        return 1
+
 
 if __name__ == "__main__":
-    # Load environment variables
-    from dotenv import load_dotenv
-    load_dotenv()
-
-    if "DATABASE_URL" not in os.environ:
-        print("ERROR: DATABASE_URL environment variable not set")
-        print("Make sure your .env file contains the DATABASE_URL")
-        sys.exit(1)
-
-    sync_schema()
+    raise SystemExit(main())
