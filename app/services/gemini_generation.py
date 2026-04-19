@@ -32,6 +32,15 @@ _MAX_FURNITURE = 6   # cap to stay within Gemini's per-request image limits
 
 
 def _s3():
+    ak = os.environ.get("MY_AWS_ACCESS_KEY_ID")
+    sk = os.environ.get("MY_AWS_SECRET_ACCESS_KEY")
+    if ak and sk:
+        return boto3.client(
+            "s3",
+            region_name=_REGION,
+            aws_access_key_id=ak,
+            aws_secret_access_key=sk,
+        )
     return boto3.client("s3", region_name=_REGION)
 
 

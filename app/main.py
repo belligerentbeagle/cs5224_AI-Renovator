@@ -6,11 +6,23 @@ from app.services.secrets import load_secrets
 load_secrets()  # injects AWS Secrets Manager values into os.environ (Lambda only)
 
 import os
+import sys
+import logging
+import traceback
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from mangum import Mangum
+
+# Configure basic logging for CloudWatch
+logger = logging.getLogger()
+logger.setLevel(logging.INFO)
+if not logger.handlers:
+    handler = logging.StreamHandler(sys.stdout)
+    handler.setFormatter(logging.Formatter('%(asctime)s - %(levelname)s - %(name)s - %(message)s'))
+    logger.addHandler(handler)
 
 from app.db import Base, _engine
 from app.models import orm  # noqa: F401 – ensures all models are registered before create_all
@@ -30,6 +42,12 @@ app = FastAPI(
     description="Backend API for the RoomStyle interior design app.",
     lifespan=lifespan,
 )
+
+@app.exception_handler(Exception)
+async def global_exception_handler(request: Request, exc: Exception):
+    logger.error(f"Unhandled exception in {request.method} {request.url}: {exc}")
+    logger.error(traceback.format_exc())
+    return JSONResponse(status_code=500, content={"detail": "Internal Server Error"})
 
 app.add_middleware(
     CORSMiddleware,

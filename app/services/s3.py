@@ -10,6 +10,15 @@ _REGION = os.environ.get("AWS_REGION", "ap-southeast-1")
 
 
 def _client():
+    ak = os.environ.get("MY_AWS_ACCESS_KEY_ID")
+    sk = os.environ.get("MY_AWS_SECRET_ACCESS_KEY")
+    if ak and sk:
+        return boto3.client(
+            "s3",
+            region_name=_REGION,
+            aws_access_key_id=ak,
+            aws_secret_access_key=sk,
+        )
     return boto3.client("s3", region_name=_REGION)
 
 
